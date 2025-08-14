@@ -1,0 +1,552 @@
+---
+title: "Brott"
+title-block-banner: "#009ca6"
+title-block-banner-color: "#FFFFFF"
+date: last-modified
+format: html
+execute:
+  echo: true
+  warning: false
+  message: false
+  cache: true
+editor_options: 
+  markdown: 
+    wrap: 72
+  chunk_output_type: console
+---
+
+```{r}
+#| label: setup
+#| include: false
+
+library(mokken)
+library(arrow)
+library(ggrepel)
+library(car)
+library(grateful) 
+library(kableExtra)
+library(readxl)
+library(tidyverse)
+library(eRm)
+library(mirt)
+library(iarm)
+library(psych)
+library(ggplot2)
+library(psychotree)
+library(matrixStats)
+library(reshape)
+library(knitr)
+library(patchwork)
+library(formattable) 
+library(easyRasch) #devtools::install_github("pgmj/easyRasch")
+library(glue)
+library(foreach)
+#library(foreign)
+library(haven)
+library(labelled)
+
+
+### some commands exist in multiple packages, here we define preferred ones that are frequently used
+select <- dplyr::select
+count <- dplyr::count
+recode <- car::recode
+rename <- dplyr::rename
+filter <- dplyr::filter
+
+# import item information
+itemlabels <- read_excel("itemlabels/BrottItemlabels.xls")
+
+# where is the data? This is for Mac
+datafolder <- "~/Library/CloudStorage/OneDrive-SharedLibraries-RISE/SHIC - Data i Dialog - Data i Dialog/data/"
+# add windows path below
+#datafolder <- "C:/Users/fridasan/RISE/SHIC - Data i Dialog - 2024/"
+
+#sthlm <- read_spss(paste0(datafolder,"Stockholm Stad/2024/Stockholmsenkäten 2002-2024 Stockholm.sav"))
+#write_parquet(sthlm, paste0(datafolder,"Stockholm Stad/2024/sthlm02-24.parquet"))
+
+df.all <- read_parquet(paste0(datafolder,"Stockholm Stad/2024/sthlm02-24.parquet"))
+#df.all <- read_parquet(paste0(datafolder,"sthlm02-24.parquet"))
+
+# subset data for this analysis
+df <- df.all %>% 
+  select(all_of(itemlabels$itemnr),Kön,ARSKURS,ar,SkolSDO)
+
+```
+
+```{r}
+RISEprimGreen <- "#009ca6"
+RISEprimRed <- "#e83c63"
+RISEprimYellow <- "#ffe500"
+RISEprimGreenMid <- "#8dc8c7"
+RISEprimRedMid <- "#f5a9ab"
+RISEprimYellowMid <- "#ffee8d"
+RISEprimGreenLight <- "#ebf5f0"
+RISEprimRedLight <- "#fde8df"
+RISEprimYellowLight <- "#fff7dd"
+RISEcompPurple <- "#482d55"
+RISEcompGreenDark <- "#0e4e65"
+RISEgrey1 <- "#f0f0f0"
+RISEgrey2 <- "#c8c8c8"
+RISEgrey3 <- "#828282"
+RISEgrey4 <- "#555555"
+
+# set some colors used later
+cutoff_line <- RISEprimRed
+dot_color <- "black"
+backg_color <- RISEprimGreenLight
+
+# set fontsize for all tables
+r.fontsize <- 15
+
+### first we pre-set our chosen cut-off values for some commonly used indices:
+msq_min <- 0.7
+msq_max <- 1.3
+zstd_min <- -2
+zstd_max <- 2
+loc_dep <- 0.2 # above average residual correlation
+dif_dif <- 0.5 # logits difference between groups in average item location (DIF)
+
+### zstd is inflated with large samples (N > 500). Reduce sample size to jz and 
+### run analysis yz random samples to get average ZSTD
+jz = 300 # number to include in dataset
+yz = 10 # number of random samples
+
+```
+
+```{r}
+#| label: recoderawdata
+#| include: false
+
+# ###### Brott
+# # hög poäng = hög risk
+
+### New recode code below, using variable names instead of numbering
+
+
+brott.f75 <- c("f75a", "f75b", "f75c", "f75d", "f75e", "f75f", "f75g", "f75h", "f75i", "f75j", "f75k", "f75l", "f75m", "f75n", "f75o", "f75p", "f75q", "f75r", "f75s")
+
+brott.f78 <- c("f78aa", "f78ba", "f78ca", "f78da", "f78ea")
+
+df_recoded <- df %>%
+  mutate(across(c(f75a:f78ea), ~ as.numeric(.x))) %>%
+  mutate(across(c(f75a:f78ea), ~ .x - 1))
+
+```
+
+## Svarsbortfall
+
+```{r}
+
+df_recoded %>% 
+    select(f75a:f78ea) %>%  # Ensure correct column selection
+    RImissing()
+```
+
+Den här figuren använde enbart data från 2024
+
+```{r}
+df_recoded %>% 
+  mutate(ar = as.numeric(ar)) %>% 
+  filter(ar > 2023) %>% 
+  select(f75a:f78ea) %>%  # Ensure correct column selection
+  RImissing()
+
+```
+
+Det är låg nivå av bortfall på itemnivå.
+
+Recode 99 and 999 to NA and make demographic variables to factors.
+
+```{r}
+df_r2 <- df_recoded %>% 
+  mutate(SkolSDO = factor(SkolSDO, levels = val_labels(df_recoded$SkolSDO),
+                          labels = names(val_labels(df_recoded$SkolSDO)))) %>% 
+  mutate(Årskurs = factor(ARSKURS, levels = val_labels(df_recoded$ARSKURS),
+                          labels = names(val_labels(df_recoded$ARSKURS)))) %>% 
+  select(!ARSKURS) %>% 
+  mutate(SkolSDO = car::recode(SkolSDO,"99=NA;'Övrigt ospecificerat'=NA"),
+         Årskurs = car::recode(Årskurs,"999=NA")) %>% 
+  mutate(Kön = factor(Kön, levels = 1:2, labels = c("Pojke","Flicka")),
+         År = as.numeric(ar)) %>% 
+  select(!ar)
+#d_dif_f75 %>% count(Kön)
+```
+
+
+
+```{r}
+library(rsample)
+set.seed(14568)
+# create dataframe with 2024 data with all variables (post recode) and only complete responses
+df24 <- df_r2 %>% 
+  filter(År == 2024) %>% 
+  na.omit() %>% 
+  select(!År)
+
+# Put 1/5 of the data into the training set 
+data_split <- initial_split(df24, prop = 1/5, strata = SkolSDO)
+
+# Create data frames for the two sets:
+d <- training(data_split)
+d_test  <- testing(data_split)
+
+
+# create DIF df
+d_dif <- d %>% 
+  select(Kön,Årskurs,SkolSDO)
+
+d_testdif <- d_test %>% 
+  select(Kön,Årskurs,SkolSDO)
+
+# create separate dataframes
+d_f75 <- d %>% 
+  select(Kön, Årskurs, SkolSDO, any_of(brott.f75))
+
+d_test_f75 <- d_test %>% 
+  select(Kön, Årskurs, SkolSDO, any_of(brott.f75))
+
+d_f78 <- d %>% 
+  select(Kön, Årskurs, SkolSDO, any_of(brott.f78))
+
+d_test_f78 <- d_test %>% 
+  select (Kön, Årskurs, SkolSDO, any_of(brott.f78))
+
+
+
+# create separate DIF dataframes
+d_dif_f75 <- d_f75 %>% 
+  select(Kön,Årskurs,SkolSDO)
+
+d_testdif_f75 <- d_test_f75 %>% 
+  select(Kön,Årskurs,SkolSDO)
+
+d_dif_f78 <- d_f78 %>% 
+  select(Kön,Årskurs,SkolSDO)
+
+d_testdif_f78 <- d_test_f78 %>% 
+  select(Kön,Årskurs,SkolSDO)
+
+
+# remove non-items
+d <- d %>% 
+  select(!c(Kön,Årskurs,SkolSDO))
+d_test <- d_test %>% 
+  select(!c(Kön,Årskurs,SkolSDO))
+
+d_f75 <- d_f75 %>% 
+  select(!c(Kön,Årskurs,SkolSDO))
+d_test_f75 <- d_test_f75 %>% 
+  select(!c(Kön,Årskurs,SkolSDO))
+
+d_f78 <- d_f78 %>% 
+  select(!c(Kön,Årskurs,SkolSDO))
+d_test_f78 <- d_test_f78 %>% 
+  select(!c(Kön,Årskurs,SkolSDO))
+
+```
+
+
+## Beskrivning frågor
+
+Frågorna i detta avsnitt är i datafilen betecknade som f75a till och med s (19 frågor, nr 77 i PDF med frågor), samt f77aa till ea (5 frågor, nr 80 i PDF). Den första sektionen fokuserar på hur ofta respondenten begått olika brott, medan den andra sektionen fokuserar på huruvida respondenten blivit utsatt för brott.
+
+Frågorna f75a-s inleds med "Hur många gånger har du gjort följande saker under de senaste 12 månaderna?"
+
+Svarsalternativen är
+
+- Ingen gång
+- 1-2 gånger
+- 3-5 gånger
+- 6-10 gånger 
+- Mer än 10 gånger
+
+De kodas om som siffror 0-5, där 0 = "Ingen gång". 
+
+Denna typ av frekvensskattningar med så många svarsalternativ brukar sällan ge psykometriskt meningsfull information, d.v.s. det är inte tillräckligt stor skillnad på de olika svarsalternativen för att var och en av kategorierna ska bidra med mera information om respondenten. Vi kommer med största sannolikhet behöva slå samman flera av dem för att kunna göra en rimlig analys.
+
+Frågorna f77a-e inleds med "Har du varit med om något av följande under de senaste 12 månaderna?"
+
+Svarsalternativen är "Nej" eller "Ja ..... antal gånger", med följdfråga på "Ja" som är "Anmälde du detta till polisen". Vi kommer inte titta på följdfrågorna i denna analys.
+
+För denna analys är inte målsättningen att undersöka möjligheten att ta fram ett eller flera indexvärden utifrån sammansättningar av items/frågor som sedan kan användas på samtliga deltagare. Detta beror på att de flesta inte har begått något brott. Däremot vill vi se hur frågorna fungerar relativt varandra (item-hierarki) och om det skiljer sig mellan kön, årskurs och över tid.
+
+```{r}
+itemlabels %>% 
+  kbl(booktabs = T, escape = F) %>%
+      # bootstrap options are for HTML output
+      kable_styling(bootstrap_options = c("striped", "hover"), 
+                    position = "left",
+                    full_width = F,
+                    font_size = r.fontsize,
+                    fixed_thead = T) %>% # when there is a long list in the table
+      #  column_spec(c(2:3), color = "red") %>% 
+      row_spec(1:19, bold = F, color = "black", background = "lightblue") %>% 
+      row_spec(20:24, bold = F, color = "white", background = RISEprimGreen) %>%
+      column_spec(1, bold = T) %>% 
+      kable_classic(html_font = "Lato")
+```
+
+### Demografi
+
+```{r}
+#| label: descriptives1
+#| layout-ncol: 2
+RIdemographics(d_dif$Kön, "Kön")
+RIdemographics(d_dif$Årskurs, "Årskurs")
+RIdemographics(d_testdif$SkolSDO, "SkolSDO")
+```
+
+### Item-data
+
+```{r}
+#| tbl-cap: "Total number of responses for all items"
+RIallresp(d)
+```
+
+### Descriptives - item level
+
+```{r}
+#| column: margin
+RIlistItemsMargin(d, fontsize = 12)
+```
+
+::: panel-tabset
+#### Tile plot
+```{r}
+RItileplot(d)
+```
+#### Stacked bars
+```{r}
+RIbarstack(d)
+```
+#### Barplots
+```{r}
+#| layout-ncol: 2
+RIbarplot(d)
+```
+:::
+
+## Svarskategorier
+```{r}
+mirt(d_f75, model=1, itemtype='Rasch', verbose = FALSE) %>% 
+  plot(type="trace", as.table = TRUE, 
+       theta_lim = c(-5,5))
+```
+
+## Svarskategorier
+```{r}
+mirt(d_f78, model=1, itemtype='Rasch', verbose = FALSE) %>% 
+  plot(type="trace", as.table = TRUE, 
+       theta_lim = c(-5,5))
+```
+
+Tydlig dikotom fördelning. Kodar om till två svarskategorier
+
+## Omkodning av svarskategorier
+```{r}
+d <- d %>%
+  mutate(across(starts_with("f75"), ~ car::recode(.x, "0=0; 1=1; 2=1; 3=1; 4=1")))
+d_test<- d_test %>%
+  mutate(across(starts_with("f75"), ~ car::recode(.x, "0=0; 1=1; 2=1; 3=1; 4=1")))
+
+d_f75 <- d_f75 %>%
+  mutate(across(starts_with("f75"), ~ car::recode(.x, "0=0; 1=1; 2=1; 3=1; 4=1")))
+d_test_f75<- d_test_f75 %>%
+  mutate(across(starts_with("f75"), ~ car::recode(.x, "0=0; 1=1; 2=1; 3=1; 4=1")))
+
+mirt(d, model=1, itemtype='Rasch', verbose = FALSE) %>% 
+  plot(type="trace", as.table = TRUE, 
+       theta_lim = c(-5,5))
+```
+
+
+## Analys 1 f75
+
+```{r}
+#| column: margin
+#| echo: false
+RIlistItemsMargin(d_f75)
+```
+
+::: panel-tabset
+### Mokken dimensionality
+```{r}
+aisp(d_f75) %>% 
+  as.data.frame() %>% 
+  set_names("h > 0.3") %>% 
+  arrange(`h > 0.3`) %>% 
+  kbl_rise(tbl_width = 20)
+```
+### Item-restscore
+```{r}
+d_test2_f75 <- d_test_f75 %>% select(-f75k, -f75e)  # Exclude problematic item
+d_2_f75 <- d_f75 %>% select(-f75k, -f75e)  # Exclude problematic item
+  #select(!any_of(removed_items)) %>% 
+RIbootRestscore(d_test2_f75, iterations = 200, samplesize = 600, cpu = 8)
+RIrestscore(d_2_f75)  # Use the same dataset
+```
+
+f75k är blir problematisk och går inte att köra. Får ta bort den
+
+### Conditional infit
+```{r}
+simfit <- RIgetfit(d_f75, iterations = 200, cpu = 8)
+RIitemfit(d_f75, simfit)
+```
+### CICC
+```{r}
+#RIciccPlot(d_75)
+```
+### PCA
+```{r}
+#| tbl-cap: "PCA of Rasch model residuals"
+RIpcmPCA(d_f75)
+```
+### LRT
+```{r}
+#RIbootLRT(d_f75)
+```
+### Loadings 1st contrast
+```{r}
+RIloadLoc(d_f75, model = "RM")
+```
+### Lokalt oberoende
+```{r}
+RIpartgamLD(d_f75)
+```
+### Residualkorrelationer
+```{r}
+#| label: tbl-rescoreskola
+simcor5 <- RIgetResidCor(d_test_f75, iterations = 500, cpu = 11)
+
+RIresidcorr(d_test_f75, cutoff = simcor5$p99)
+```
+### Targeting
+```{r}
+#| fig-height: 7
+RItargeting(d_f75, model = "RM")
+```
+### Itemhierarki
+```{r}
+#| fig-height: 7
+d_f75.erm <- RM(d_f75)
+plotPImap(d_f75.erm, sorted = T)
+```
+### Person fit
+```{r}
+RIpfit(d_f75)
+```
+### DIF kön
+```{r}
+RIpartgamDIF(d_f75, d_dif_f75$Kön)
+#RIdifTableLR(d_f75, d_dif_f75$Kön)
+#RIdifThreshFigLR(d_f75, d_dif_f75$Kön)
+```
+### DIF årskurs
+```{r}
+RIpartgamDIF(d, d_dif$Årskurs)
+#RIdifTableLR(d, d_dif$Årskurs)
+#RIdifThreshFigLR(d, d_dif$Årskurs)
+```
+:::
+
+
+### DIF över årtal
+
+::: panel-tabset
+#### Data prep
+```{r}
+df_r2 %>% 
+  select("f75a", "f75b", "f75c", "f75d", "f75e", "f75f", "f75g", "f75h", "f75i", "f75j", "f75k", "f75l", "f75m", "f75n", "f75o", "f75p", "f75q", "f75r", "f75s", "År") %>% 
+  count(År)
+
+difdata75 <- df_r2 %>% 
+  select("f75a", "f75b", "f75c", "f75d", "f75e", "f75f", "f75g", "f75h", "f75i", "f75j", "f75k", "f75l", "f75m", "f75n", "f75o", "f75p", "f75q", "f75r", "f75s", "År") %>% 
+  filter(År > 2012) %>% 
+  na.omit()
+
+difdata75 %>% 
+  count(År)
+
+dif75_år <- difdata75$År
+difdata75$År <- NULL
+
+
+df_r2 %>% 
+  select("f78aa", "f78ba", "f78ca", "f78da", "f78ea", "År") %>% 
+  count(År)
+
+difdata78 <- df_r2 %>% 
+  select("f78aa", "f78ba", "f78ca", "f78da", "f78ea", "År") %>% 
+  filter(År > 2012) %>% 
+  na.omit()
+
+difdata78 %>% 
+  count(År)
+
+dif78_år <- difdata78$År
+difdata78$År <- NULL
+
+
+```
+
+#### DIF tabell
+```{r}
+RIdifTable(difdata75,dif75_år)
+RIdifTable(difdata78,dif78_år)
+```
+#### DIF figur
+```{r}
+RIdifFigure(difdata75,dif75_år) +
+  scale_y_continuous(limits = c(-2,2))
+RIdifFigure(difdata78,dif78_år) +
+  scale_y_continuous(limits = c(-2,2))
+```
+:::
+
+- Mokken-analysen indikerar värde 1 alla items
+
+
+```{r}
+items.utsatt <- df_r2 %>% 
+  select(starts_with("f78")) %>% 
+  names()
+
+SEutsatt <- function(i) {
+  df %>%
+    group_by(ar,.data[[i]]) %>%
+    summarise(n = n()) %>%
+    mutate(Procent = round(100 * n / sum(n), 1)) %>% 
+    ungroup() %>% 
+    add_column(Item = as.character(i)) %>% 
+    rename(respons = as.character(i))
+}
+
+df.utsatt <- rbind(SEutsatt("f78aa"),
+                   SEutsatt("f78ba"),
+                   SEutsatt("f78ca"),
+                   SEutsatt("f78da"),
+                   SEutsatt("f78ea"))
+```
+
+```{r}
+utsatt.legend <- c("Allvarligt hotad","Rånad","Bestulen","Misshandlad","Tvingad till sex")
+RISEpalette1 <- colorRampPalette(colors = c("#009ca6", "#e83c63", "#ffe500"))(6)
+library(ggiraph)
+
+fig1 <- df.utsatt %>% 
+  filter(respons == 1) %>% 
+  ggplot(aes(y = Procent, x = factor(ar), group = Item, color = Item)) +
+  geom_point_interactive(aes(tooltip = Procent),
+                         size = 3) +
+  geom_line(linewidth = 1.2) +
+  scale_color_manual(labels = utsatt.legend, values = RISEpalette1) +
+  xlab("Årtal")
+
+girafe(ggobj = fig1)
+```
+
+
+
+```{r}
+## Referenser

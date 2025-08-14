@@ -1,0 +1,1509 @@
+---
+title: "Föräldrafrågor"
+title-block-banner: "#009ca6"
+title-block-banner-color: "#FFFFFF"
+author: 
+  name: Magnus Johansson
+  affiliation: RISE Research Institutes of Sweden
+  affiliation-url: https://ri.se/shic
+  orcid: 0000-0003-1669-592X
+date: last-modified
+format: html
+execute:
+  echo: true
+  warning: false
+  message: false
+  cache: true
+editor_options: 
+  markdown: 
+    wrap: 72
+  chunk_output_type: console
+---
+
+```{r}
+#| label: setup
+#| include: false
+
+library(mokken)
+library(arrow)
+library(ggrepel)
+library(car)
+library(grateful) 
+library(kableExtra)
+library(readxl)
+library(tidyverse)
+library(eRm)
+library(mirt)
+library(iarm)
+library(psych)
+library(ggplot2)
+library(psychotree)
+library(matrixStats)
+library(reshape)
+library(knitr)
+library(patchwork)
+library(formattable) 
+library(easyRasch) # devtools::install_github("pgmj/easyRasch")
+library(glue)
+library(foreach)
+#library(foreign)
+library(haven)
+library(labelled)
+
+### some commands exist in multiple packages, here we define preferred ones that are frequently used
+select <- dplyr::select
+count <- dplyr::count
+recode <- car::recode
+rename <- dplyr::rename
+
+# import item information
+# import item information
+itemlabels <- read_excel("itemlabels/PARENTSitems.xls")
+
+# where is the data? This is for Mac
+datafolder <- "~/Library/CloudStorage/OneDrive-SharedLibraries-RISE/SHIC - Data i Dialog - Data i Dialog/data/"
+# add windows path below
+#datafolder <- "C:/Users/fridasan/RISE/SHIC - Data i Dialog - 2024/"
+
+df.all <- read_parquet(paste0(datafolder,"Stockholm Stad/2024/sthlm02-24.parquet"))
+#df.all <- read_parquet(paste0(datafolder,"sthlm02-24.parquet"))
+
+#df.all <- read_parquet("../../data/2022-08-22 sthlmsenkat data.parquet")
+
+df <- df.all %>% 
+  select(all_of(itemlabels$itemnr),Kön,ARSKURS,ar,SkolSDO)
+
+```
+
+
+```{r}
+#| label: recoderawdata
+#| include: false
+
+# ###### Föräldrafrågor
+# # koda om svaren för items som ingår i föräldrafaktorer, F79-F82, f83a-h, F58
+# # variabler df[]
+# # hög poäng = hög risk
+
+
+föräldrar.pos <- c("f83a", "f83c", "f83e", "f83g", "f83h")
+föräldrar.neg <- c("f83b", "f83d", "f83f")
+föräldrar.delskala <- c("F79", "F80", "F81", "F82", "F58")
+
+df_recoded <- df %>% 
+  mutate(across(c(F79, F80, F81, F82, F58, f83a:f83h), ~ as.numeric(.x))) %>% 
+  mutate(across(all_of(föräldrar.neg), ~ .x - 1),
+         across(all_of(föräldrar.pos), ~ car::recode(.x, "4=0;3=1;2=2;1=3")),
+         across(c(F79, F80, F81, F58), ~ car::recode(.x, "1=0;2=1;3=2;4=3;5=NA;998=NA")),
+         across(c(F82), ~ car::recode(.x, "1=0;2=1;998=NA")))
+
+
+```
+
+```{r}
+df_recoded %>% 
+  select(f83a:f83h) %>% 
+  pivot_longer(everything()) %>% 
+  distinct(value)
+
+df_recoded %>% 
+  select(F79:F81) %>% 
+  pivot_longer(everything()) %>% 
+  distinct(value)
+
+df_recoded %>% 
+  select(F82) %>% 
+  pivot_longer(everything()) %>% 
+  distinct(value)
+
+df_recoded %>% 
+  select(F58) %>% 
+  pivot_longer(everything()) %>% 
+  distinct(value)
+
+```
+
+```{r}
+df_r2 <- df_recoded %>% 
+  mutate(SkolSDO = factor(SkolSDO, levels = val_labels(df_recoded$SkolSDO),
+                          labels = names(val_labels(df_recoded$SkolSDO)))) %>% 
+  mutate(Årskurs = factor(ARSKURS, levels = val_labels(df_recoded$ARSKURS),
+                          labels = names(val_labels(df_recoded$ARSKURS)))) %>% 
+  select(!ARSKURS) %>% 
+  mutate(SkolSDO = car::recode(SkolSDO,"99=NA;'Övrigt ospecificerat'=NA"),
+         Årskurs = car::recode(Årskurs,"999=NA")) %>% 
+  mutate(Kön = factor(Kön, levels = 1:2, labels = c("Pojke","Flicka")),
+         År = as.numeric(ar)) %>% 
+  select(!ar)
+```
+
+```{r}
+library(rsample)
+set.seed(14579)
+# create dataframe with 2024 data with all variables (post recode) and only complete responses
+df24 <- df_r2 %>% 
+  filter(År == 2024) %>% 
+  na.omit() %>% 
+  select(!År)
+
+# Put 1/5 of the data into the training set 
+data_split <- initial_split(df24, prop = 1/5, strata = SkolSDO)
+
+# Create data frames for the two sets:
+d <- training(data_split)
+d_test  <- testing(data_split)
+
+# create separate dataframes
+d_föräldrar <- d 
+d_test_föräldrar <- d_test 
+
+
+# create separate DIF dataframes
+d_dif_föräldrar <- d_föräldrar %>% 
+  select(Kön,Årskurs,SkolSDO)
+
+d_testdif_föräldrar <- d_test_föräldrar %>% 
+  select(Kön,Årskurs,SkolSDO)
+
+
+# remove non-items
+d_föräldrar <- d_föräldrar %>% 
+  select(!c(Kön,Årskurs,SkolSDO))
+d_test_föräldrar <- d_test_föräldrar %>% 
+  select(!c(Kön,Årskurs,SkolSDO))
+
+
+```
+
+
+## Föräldrafrågor
+
+Item/frågor har etiketter F79-F82 samt f83a-h i datafilen, och motsvaras av fråga 81-84 samt 85 i PDF-filen med frågor.
+
+Samtliga f83-frågor har fyra svarskategorier: *"Stämmer mycket bra, Stämmer ganska bra, Stämmer ganska dåligt, Stämmer mycket dåligt"*. Sektionen i enkäten inleds med meningen: *"Hur väl stämmer följande påståenden in på hur dina föräldrar/vårdnadshavare är mot dig?"*.
+
+F79-81 har fyra svarsalternativ, som varierar med frågan, och F82 har bara två svarsalternativ ("Ja" eller "Nej").
+
+Svarsdata har kodats så att högre poäng innebär mera problem/högre "risk". Svarsalternativet *"Vet inte"* har kodats som saknat svar.
+
+I Stockholmsenkäten finns items i olika delar som angår föräldrar på olika vis, som inte lagts samman med föräldrafrågorna tidigare. Vi kommer senare i analysen att lägga till frågan
+
+- F58 "Hur skulle dina föräldrar reagera om du hade skolkat?"
+
+### Lista med enkätfrågorna
+
+```{r}
+#| label: showitems
+RIlistitems(d_föräldrar)
+  
+```
+
+## Deskriptiva data
+
+### Demografi
+
+```{r}
+#| label: descriptives1
+#| layout-ncol: 2
+RIdemographics(d_dif_föräldrar$Kön, "Kön")
+RIdemographics(d_dif_föräldrar$Årskurs, "Årskurs")
+RIdemographics(d_testdif_föräldrar$SkolSDO, "SkolSDO")
+```
+
+### Item-data Skola negativ
+
+::: panel-tabset
+#### Tile plot
+```{r}
+RItileplot(d_föräldrar)
+```
+#### Stacked bars
+```{r}
+RIbarstack(d_föräldrar)
+```
+:::
+
+## Analys 1 - alla items
+
+```{r}
+#| column: margin
+#| echo: false
+RIlistItemsMargin(d_föräldrar)
+```
+
+::: panel-tabset
+### Mokken dimensionality
+```{r}
+aisp(d_föräldrar) %>% 
+  as.data.frame() %>% 
+  set_names("h > 0.3") %>% 
+  arrange(`h > 0.3`) %>% 
+  kbl_rise(tbl_width = 20)
+```
+
+### Item-restscore
+```{r}
+d_föräldrar %>% 
+  #select(!any_of(removed_items)) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+RIrestscore(d_föräldrar)
+```
+### PCA
+```{r}
+#| tbl-cap: "PCA of Rasch model residuals"
+RIpcmPCA(d_föräldrar)
+```
+### Loadings 1st contrast
+```{r}
+#| label: fig-loadloc11
+RIloadLoc(d_föräldrar)
+```
+### Lokalt oberoende
+```{r}
+RIpartgamLD(d_föräldrar)
+```
+### Targeting
+```{r}
+#| fig-height: 9
+RItargeting(d_föräldrar)
+```
+### Itemhierarki
+```{r}
+#| fig-height: 9
+RIitemHierarchy(d_föräldrar)
+```
+### Svarskategorier
+```{r}
+mirt(d_föräldrar, model=1, itemtype='Rasch', verbose = FALSE) %>% 
+  plot(type="trace", as.table = TRUE, 
+       theta_lim = c(-5,5))
+```
+### DIF kön
+```{r}
+RIpartgamDIF(d_föräldrar, d_dif_föräldrar$Kön)
+RIdifTableLR(d_föräldrar, d_dif_föräldrar$Kön)
+```
+### DIF årskurs
+```{r}
+RIpartgamDIF(d_föräldrar, d_dif_föräldrar$Årskurs)
+RIdifTableLR(d_föräldrar, d_dif_föräldrar$Årskurs)
+```
+:::
+
+- Mokken-analysen tyder på multidimensionalitet. Värde 0 indikeras för f83d och F58. Värde 1 indikeras för F82, f83a, c, e, g och h. Värde 2 indikeras för F79, F80 och F81 och värde 3 indikeras för f83b och f83f.
+- Item-restscore boostrap flaggar många items som både underfit och overfit. VIlket delvis beror på multidimensionalitet och att vissa items mäter samma sak.
+- Itemrestscore flaggar de flesta items med signifikans 0.01
+- PCA av residualer visar 2.23 som högsta eigenvalue dvs indikerar stark multidimensionalitet
+- Figuren med faktorladdningar på första residualkontrasten (loadloc) visar olika kluster. Ett verkar vara de positiva påståenden i fråga 83 (a, c, e, g och h), ett kan vara de mer negativa påståenden i fråga 83 (b, d, f) och fråga 81 och 58
+- Lokala beroenden (partial gamma) existrerar för de allra flesta items
+- Targeting visar en del golveffekter och inte så matchande trösklar och förmåga
+- Itemhierarki visar att flera items har oordnade svarskategoirer: F79, f83c, f83a, f83g
+
+- Svarskategorin "stämmer ganska dåligt" är inte representerad för f83a, f83c, f83e, f83g, f83h, samt "Sällan" för för F79.
+
+- DIF för kön flaggas för F80 (partial gamma och tableLR) och F58 (partial gamma). Inget på årskurs
+
+Slutsats: Många items har problem med svarskategorier och residualkorrelationer. Både PCA av residualer och figuren med faktorladdning på första residualkontrasten tyder också på multidimensionalitet bland items. Det verkar tex som att de positiva påståendena hänger ihop och att de negativa påståenden kan tillhöra en annan dimension och som handlar om föräldrnas negativa reaktioner vilket kan utgöra otrygghet gentemot föräldrarna.Tar därför bort f83d och f83b vilka alla också visar starkt underfit.
+
+```{r}
+removed_items <- c("f83d", "f83b")
+itemlabels %>% 
+  filter(itemnr %in% removed_items) %>% 
+  kbl_rise()
+```
+
+```{r}
+d_backup_föräldrar <- d_föräldrar
+
+d_föräldrar <- d_föräldrar %>% 
+  select(!any_of(removed_items))
+```
+
+
+## Analys 2 
+
+utan f83d och f83b
+
+```{r}
+#| column: margin
+#| echo: false
+RIlistItemsMargin(d_föräldrar)
+```
+
+::: panel-tabset
+### Mokken dimensionality
+```{r}
+aisp(d_föräldrar) %>% 
+  as.data.frame() %>% 
+  set_names("h > 0.3") %>% 
+  arrange(`h > 0.3`) %>% 
+  kbl_rise(tbl_width = 20)
+```
+
+### Item-restscore
+```{r}
+d_föräldrar %>% 
+  select(!any_of(removed_items)) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+RIrestscore(d_föräldrar)
+```
+### PCA
+```{r}
+#| tbl-cap: "PCA of Rasch model residuals"
+RIpcmPCA(d_föräldrar)
+```
+### Loadings 1st contrast
+```{r}
+#| label: fig-loadloc2
+RIloadLoc(d_föräldrar)
+```
+### Lokalt oberoende
+```{r}
+RIpartgamLD(d_föräldrar)
+```
+### Targeting
+```{r}
+#| fig-height: 9
+RItargeting(d_föräldrar)
+```
+### Itemhierarki
+```{r}
+#| fig-height: 9
+RIitemHierarchy(d_föräldrar)
+```
+### Svarskategorier
+```{r}
+mirt(d_föräldrar, model=1, itemtype='Rasch', verbose = FALSE) %>% 
+  plot(type="trace", as.table = TRUE, 
+       theta_lim = c(-5,5))
+```
+### DIF kön
+```{r}
+RIpartgamDIF(d_föräldrar, d_dif_föräldrar$Kön)
+RIdifTableLR(d_föräldrar, d_dif_föräldrar$Kön)
+```
+### DIF årskurs
+```{r}
+RIpartgamDIF(d_föräldrar, d_dif_föräldrar$Årskurs)
+RIdifTableLR(d_föräldrar, d_dif_föräldrar$Årskurs)
+```
+:::
+
+- Mokken-analysen tyder fortsatt på multidimensionalitet. Värde 0 indikeras för F58 och f83f. Värde 1 indikeras för F82, f83a, c, e, g och h. Värde 2 indikeras för F79, F80 och F81 och värde 3 indikeras för f83b och f83f.
+- Item-restscore boostrap flaggar F58 (100), f83f (97) och F81 (81) som underfit. Även f83a, f83c, f83e och f83h är starkt overfit (100) men även F82 (98) och f83g (79)
+- Itemrestscore flaggar att F80, F81, F82, f83a, f83c, f83e, f83h och F58 är signifikanta på 0.01 nivån.
+- PCA av residualer visar 2.13 som högsta eigenvalue dvs indikerar fortsatt stark multidimensionalitet
+- Figuren med faktorladdningar på första residualkontrasten (loadloc) viatt f83f sticker ut och att F79, F80 och F81 ligger nära varandra på x-axeln
+- Lokala beroenden (partial gamma) existrerar för många item-par, framför allt f83a och f83c, f83e och f83a, och f83c och f83e
+- Targeting visar en del golveffekter och inte så matchande trösklar och förmåga
+- Itemhierarki visar att flera items har oordnade svarskategoirer: F79, f83c, f83a, f83g
+
+- Svarskategorin "stämmer ganska dåligt" är inte representerad för f83a, f83c, f83e, f83g, f83h, samt "Sällan" för för F79.
+
+- DIF för kön flaggas för F80 (partial gamma och tableLR) och F58 (partial gamma). Inget på årskurs
+
+Slutsats: Enligt tidigare analys kan F79, F80 och F81 eventuellt bilda ett eget kluster (föräldrakontroll). Detta bekräftas av figuren med faktorladdningar och att dessa items får samma värde i Mokken (2) samt att F81 och F80 visar overfit. f83f passar troligtvis inte in heller utan kommer nog tas bort i senare analys.Kommer slå ihop svarskategorier för vissa items i senare skede.
+
+```{r}
+fkontroll <- c("F79","F80","F81")
+
+d_föräldrar <- d_föräldrar |> 
+  select(!any_of(fkontroll))
+
+```
+
+## Analys 3 - positiva items
+
+utan f83b, f83d, F79, F80, F81
+
+```{r}
+#| column: margin
+#| echo: false
+RIlistItemsMargin(d_föräldrar)
+```
+
+::: panel-tabset
+### Mokken dimensionality
+```{r}
+aisp(d_föräldrar) %>% 
+  as.data.frame() %>% 
+  set_names("h > 0.3") %>% 
+  arrange(`h > 0.3`) %>% 
+  kbl_rise(tbl_width = 20)
+```
+
+### Item-restscore
+```{r}
+d_föräldrar %>% 
+  select(!any_of(removed_items)) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+RIrestscore(d_föräldrar)
+```
+### PCA
+```{r}
+#| tbl-cap: "PCA of Rasch model residuals"
+RIpcmPCA(d_föräldrar)
+```
+### Loadings 1st contrast
+```{r}
+#| label: fig-loadloc
+RIloadLoc(d_föräldrar)
+```
+### Lokalt oberoende
+```{r}
+RIpartgamLD(d_föräldrar)
+```
+### Targeting
+```{r}
+#| fig-height: 9
+RItargeting(d_föräldrar)
+```
+### Itemhierarki
+```{r}
+#| fig-height: 9
+RIitemHierarchy(d_föräldrar)
+```
+### Svarskategorier
+```{r}
+mirt(d_föräldrar, model=1, itemtype='Rasch', verbose = FALSE) %>% 
+  plot(type="trace", as.table = TRUE, 
+       theta_lim = c(-5,5))
+```
+### DIF kön
+```{r}
+RIpartgamDIF(d_föräldrar, d_dif_föräldrar$Kön)
+RIdifTableLR(d_föräldrar, d_dif_föräldrar$Kön)
+```
+### DIF årskurs
+```{r}
+RIpartgamDIF(d_föräldrar, d_dif_föräldrar$Årskurs)
+RIdifTableLR(d_föräldrar, d_dif_föräldrar$Årskurs)
+```
+:::
+
+- Mokken-analysen visar nu samma värde 1 för alla kvarvarande items utom f83f och F58 som har värde 0
+- Item-restscore boostrap flaggar  F58 och f83f som underfit (100), och f83a, f83c (100), f83h (99) och F82 som overfit (79) 
+- Itemrestscore flaggar att  F82, f83a, f83c, f83e, f83f, f83g, f83h och F58 är signifikanta på 0.01 nivån.
+- PCA av residualer visar 1.83 som högsta eigenvalue dvs indikerar mycket mindre multidimensionalitet än innan men ändå fortsatt multidimensionalitet
+- Figuren med faktorladdningar på första residualkontrasten (loadloc) visar att F58 och f83f sticker ut tydligt jämfört med övriga
+- Lokala beroenden (partial gamma) existrerar för många item-par, framför allt f83a och f83c, f83e och f83a, och f83c och f83e
+- Targeting visar en del golveffekter och inte så matchande trösklar och förmåga
+- Itemhierarki visar att flera items har oordnade svarskategoirer: f83a och f83g
+
+- Svarskategorin "stämmer ganska dåligt" är inte representerad för f83a och f83g, 
+
+Slutsats: f83f sticker tydligt ut som underfit för både itemfit och figuren med faktorladdninga. Tar bort den. Även F58 som är negativt laddad.
+
+```{r}
+removed_items <- c("f83d", "f83b", "F79", "F80", "F81", "f83f", "F58")
+itemlabels %>% 
+  filter(itemnr %in% removed_items) %>% 
+  kbl_rise()
+```
+
+```{r}
+#d_backup_föräldrar <- d_föräldrar
+
+d_föräldrar <- d_föräldrar %>% 
+  select(!any_of(removed_items))
+```
+
+## Analys 4 - positiva items
+ Utan f83d, f83b, F79, F80, F81, f83f, F58
+
+```{r}
+#| column: margin
+#| echo: false
+RIlistItemsMargin(d_föräldrar)
+```
+
+::: panel-tabset
+### Mokken dimensionality
+```{r}
+aisp(d_föräldrar) %>% 
+  as.data.frame() %>% 
+  set_names("h > 0.3") %>% 
+  arrange(`h > 0.3`) %>% 
+  kbl_rise(tbl_width = 20)
+```
+### Conditional infit
+```{r}
+simfit4 <- RIgetfit(d_föräldrar, iterations = 200, cpu = 8)
+RIitemfit(d_föräldrar, simfit4)
+```
+### Item-restscore
+```{r}
+d_föräldrar %>% 
+  select(!any_of(removed_items)) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+RIrestscore(d_föräldrar)
+```
+### PCA
+```{r}
+#| tbl-cap: "PCA of Rasch model residuals"
+RIpcmPCA(d_föräldrar)
+```
+### Loadings 1st contrast
+```{r}
+#| label: fig-loadloc4
+RIloadLoc(d_föräldrar)
+```
+### Lokalt oberoende
+```{r}
+RIpartgamLD(d_föräldrar)
+```
+### Targeting
+```{r}
+#| fig-height: 9
+RItargeting(d_föräldrar)
+```
+### Itemhierarki
+```{r}
+#| fig-height: 9
+RIitemHierarchy(d_föräldrar)
+```
+### Conditional LRT
+```{r}
+clr_tests(d_föräldrar, model = "PCM")
+RIbootLRT(d_föräldrar, samplesize = 500)
+```
+### Svarskategorier
+```{r}
+mirt(d_föräldrar, model=1, itemtype='Rasch', verbose = FALSE) %>% 
+  plot(type="trace", as.table = TRUE, 
+       theta_lim = c(-5,5))
+```
+### DIF kön
+```{r}
+RIpartgamDIF(d_föräldrar, d_dif_föräldrar$Kön)
+RIdifTableLR(d_föräldrar, d_dif_föräldrar$Kön)
+```
+### DIF årskurs
+```{r}
+RIpartgamDIF(d_föräldrar, d_dif_föräldrar$Årskurs)
+RIdifTableLR(d_föräldrar, d_dif_föräldrar$Årskurs)
+```
+:::
+
+- Mokken-analysen visar nu samma värde 1 för alla kvarvarande items förutom för F58
+- Conditional infit flaggar lågt på f83a, f83c och högt på f83g
+- Item-restscore boostrap flaggar  F58 underfit (100), och f83c (100) som overfit och f83a (99) och f83e (97) som overfit
+- Itemrestscore flaggar att  f83a, f83c och f83g som signifikanta på 0.01 nivån
+- PCA av residualer visar 1.80 som högsta eigenvalue 
+- Figuren med faktorladdningar på första residualkontrasten (loadloc) visar att F58 sticker ut mycket
+- Lokala beroenden (partial gamma) existrerar för många item-par, framför allt f83a och f83c, f83e och f83a, och f83c och f83e
+- Targeting mycket dålig, visar en del golveffekter och inte så matchande trösklar och förmåga
+- Itemhierarki visar att flera items har oordnade svarskategoirer: f83a och f83g
+- Conditional LRT visar 100% statistiskt signifikanta observationer
+
+- Svarskategorin "stämmer ganska dåligt" är inte representerad för f83a och f83g, 
+
+Slutsats: f83a och f83c är mest korrelerade. Eftersom f83a är ganska lik f83e samt har oordnade svarskategorier väljer jag att ta bort den.
+
+
+```{r}
+removed_items <- c("f83d", "f83b", "F79", "F80", "F81", "f83f", "F58", "f83a")
+itemlabels %>% 
+  filter(itemnr %in% removed_items) %>% 
+  kbl_rise()
+```
+
+```{r}
+#d_backup_föräldrar <- d_föräldrar
+
+d_föräldrar <- d_föräldrar %>% 
+  select(!any_of(removed_items))
+```
+
+
+## Analys 5 - positiva items
+ Utan f83d, f83b, F79, F80, F81, f83f, f83a, F58
+
+```{r}
+#| column: margin
+#| echo: false
+RIlistItemsMargin(d_föräldrar)
+```
+
+::: panel-tabset
+### Mokken dimensionality
+```{r}
+aisp(d_föräldrar) %>% 
+  as.data.frame() %>% 
+  set_names("h > 0.3") %>% 
+  arrange(`h > 0.3`) %>% 
+  kbl_rise(tbl_width = 20)
+```
+### Conditional infit
+```{r}
+simfit6 <- RIgetfit(d_föräldrar, iterations = 200, cpu = 8)
+RIitemfit(d_föräldrar, simfit6)
+```
+### Item-restscore
+```{r}
+d_föräldrar %>% 
+  select(!any_of(removed_items)) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+RIrestscore(d_föräldrar)
+```
+### PCA
+```{r}
+#| tbl-cap: "PCA of Rasch model residuals"
+RIpcmPCA(d_föräldrar)
+```
+### Loadings 1st contrast
+```{r}
+#| label: fig-loadloc6
+RIloadLoc(d_föräldrar)
+```
+### Lokalt oberoende
+```{r}
+RIpartgamLD(d_föräldrar)
+```
+### Targeting
+```{r}
+#| fig-height: 9
+RItargeting(d_föräldrar)
+```
+### Itemhierarki
+```{r}
+#| fig-height: 9
+RIitemHierarchy(d_föräldrar)
+```
+### Conditional LRT
+```{r}
+clr_tests(d_föräldrar, model = "PCM")
+RIbootLRT(d_föräldrar, samplesize = 500)
+```
+### Svarskategorier
+```{r}
+mirt(d_föräldrar, model=1, itemtype='Rasch', verbose = FALSE) %>% 
+  plot(type="trace", as.table = TRUE, 
+       theta_lim = c(-5,5))
+```
+### DIF kön
+```{r}
+RIpartgamDIF(d_föräldrar, d_dif_föräldrar$Kön)
+RIdifTableLR(d_föräldrar, d_dif_föräldrar$Kön)
+```
+### DIF årskurs
+```{r}
+RIpartgamDIF(d_föräldrar, d_dif_föräldrar$Årskurs)
+RIdifTableLR(d_föräldrar, d_dif_föräldrar$Årskurs)
+```
+:::
+
+- Mokken-analysen visar nu samma värde 1 för alla kvarvarande items 
+- Conditional infit flaggar lågt på f83c och högt på F83g
+- Item-restscore boostrap flaggar nu bara ett item, vilket är f83c som 75 i overfit
+- Itemrestscore flaggar nu bara f83c som signifikant på 0.01 nivån
+- PCA av residualer visar 1.65 som högsta eigenvalue 
+- Figuren med faktorladdningar på första residualkontrasten (loadloc) ser ok ut
+- Lokala beroenden (partial gamma) existrerar fortsatt för framför allt f83c och f83e
+- Targeting mycket dålig, visar en del golveffekter och inte så matchande trösklar och förmåga
+- Itemhierarki visar att flera items har oordnade svarskategoirer: f83a och f83g
+- Conditional LRT visar 
+
+- Svarskategorin "stämmer ganska dåligt" är inte representerad för f83g 
+
+Slutsats: f83c och f83e är mest korrelerade. Frågan f83c är bäst så tar bort f83e
+
+```{r}
+
+removed_items <- c( "f83a", "f83e")
+itemlabels %>% 
+  filter(itemnr %in% removed_items) %>% 
+  kbl_rise()
+
+removed_items <- c("f83d", "f83b", "F79", "F80", "F81", "F58", "f83f", "f83a", "f83e")
+itemlabels %>% 
+  filter(itemnr %in% removed_items) %>% 
+  kbl_rise()
+```
+
+```{r}
+#d_backup_föräldrar <- d_föräldrar
+
+d_föräldrar_pos <- d_backup_föräldrar %>% 
+  select(!any_of(removed_items))
+
+d_föräldrar <- d_föräldrar %>% 
+  select(!any_of(removed_items))
+```
+
+```{r}
+d_föräldrar <- d_föräldrar %>%
+  mutate(across(any_of("f83g"), ~ car::recode(.x, "0=0; 1=1; 2=2; 3=2")))
+
+d_föräldrar_pos <- d_föräldrar %>%
+  mutate(across(any_of("f83g"), ~ car::recode(.x, "0=0; 1=1; 2=2; 3=2")))
+
+d_test_föräldrar <- d_test_föräldrar %>%
+  mutate(across(any_of("f83g"), ~ car::recode(.x, "0=0; 1=1; 2=2; 3=2")))
+#d_föräldrar %>% count(f83g)
+```
+
+
+## Analys 6 - positiva items
+ Utan f83d, f83b, F79, F80, F81, f83f, f83a, F58, f83e
+
+```{r}
+#| column: margin
+#| echo: false
+RIlistItemsMargin(d_föräldrar)
+RIlistItemsMargin(d_föräldrar_pos)
+```
+
+::: panel-tabset
+### Mokken dimensionality
+```{r}
+aisp(d_föräldrar) %>% 
+  as.data.frame() %>% 
+  set_names("h > 0.3") %>% 
+  arrange(`h > 0.3`) %>% 
+  kbl_rise(tbl_width = 20)
+```
+### Conditional infit
+```{r}
+simfit7 <- RIgetfit(d_föräldrar, iterations = 200, cpu = 8)
+RIitemfit(d_föräldrar, simfit7)
+```
+### Item-restscore
+```{r}
+d_föräldrar %>% 
+  select(!any_of(removed_items)) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+RIrestscore(d_föräldrar)
+```
+### PCA
+```{r}
+#| tbl-cap: "PCA of Rasch model residuals"
+RIpcmPCA(d_föräldrar)
+```
+### Loadings 1st contrast
+```{r}
+#| label: fig-loadloc7
+RIloadLoc(d_föräldrar)
+```
+### Lokalt oberoende
+```{r}
+RIpartgamLD(d_föräldrar)
+```
+### Residualkorrelationer
+```{r}
+#| label: tbl-rescoreskola7
+simcor7 <- RIgetResidCor(d_föräldrar, iterations = 500, cpu = 8)
+
+RIresidcorr(d_föräldrar, cutoff = simcor7$p99)
+```
+### Targeting
+```{r}
+#| fig-height: 9
+RItargeting(d_föräldrar)
+```
+### Itemhierarki
+```{r}
+#| fig-height: 9
+RIitemHierarchy(d_föräldrar)
+```
+### Conditional LRT
+```{r}
+clr_tests(d_föräldrar, model = "PCM")
+RIbootLRT(d_föräldrar, samplesize = 500)
+```
+### Svarskategorier
+```{r}
+mirt(d_föräldrar, model=1, itemtype='Rasch', verbose = FALSE) %>% 
+  plot(type="trace", as.table = TRUE, 
+       theta_lim = c(-5,5))
+
+d_selected <- d_backup_föräldrar %>%
+  select("f83e", "f83f", "f83c", "f83g", "f83h", "F82")  # Replace with actual variable names
+
+# Run the analysis on the selected variables
+mirt(d_selected, model = 1, itemtype = 'Rasch', verbose = FALSE) %>% 
+  plot(type = "trace", as.table = TRUE, theta_lim = c(-5, 5))
+
+```
+### DIF kön
+```{r}
+RIpartgamDIF(d_föräldrar, d_dif_föräldrar$Kön)
+RIdifTableLR(d_föräldrar, d_dif_föräldrar$Kön)
+```
+### DIF årskurs
+```{r}
+RIpartgamDIF(d_föräldrar, d_dif_föräldrar$Årskurs)
+RIdifTableLR(d_föräldrar, d_dif_föräldrar$Årskurs)
+```
+:::
+
+- Mokken-analysen visar nu samma värde 1 för alla kvarvarande items 
+- Conditional infit flaggar lågt på f83c och högt på F83g
+- Item-restscore boostrap flaggar nu ingenting
+- Itemrestscore flaggar nu inte några items som signifikanta
+- PCA av residualer visar 1.53 som högsta eigenvalue 
+- Figuren med faktorladdningar på första residualkontrasten (loadloc) ser ok ut, eventuellt sticker f83g ut något
+- Lokala beroenden (partial gamma) något svaga mellan f83c och F82
+- Residualkorrelationer visar att korrelationen mellan f83c och F82 är just mkt svag
+- Targeting mycket dålig, visar en del golveffekter och inte så matchande trösklar och förmåga
+- Itemhierarki visar nu inga oordnade svarskategorier men inte heller ett så brett spann
+- Conditional LRT visar 50% statistiskt signifikanta observationer
+
+
+Slutsats: Inga items är längre korrelerade och vi mäter bara en dimension. Dessvärre är targetingen mycket dålig. Vi fortsätter titta på reliabilitet
+
+### DIF över årtal
+
+::: panel-tabset
+#### Data prep
+```{r}
+df_r2 %>% 
+  select(F82, f83c, f83g, f83h, År) %>% 
+  count(År)
+
+difdata <- df_r2 %>% 
+  select(F82, f83c, f83g, f83h, År) %>% 
+  filter(År > 2012) %>% 
+  na.omit()
+
+difdata %>% 
+  count(År)
+
+dif_år <- difdata$År
+difdata$År <- NULL
+```
+
+#### DIF tabell
+```{r}
+RIdifTable(difdata,dif_år)
+```
+#### DIF figur
+```{r}
+RIdifFigure(difdata,dif_år) +
+  scale_y_continuous(limits = c(-2,2))
+```
+:::
+### Reliabilitet
+
+```{r}
+#| fig-height: 4
+d_test_föräldrar %>% 
+  select(!any_of(removed_items)) %>% 
+  RItif(samplePSI = T)
+```
+
+### Item-parametrar
+
+```{r}
+itemlabels %>% 
+  filter(itemnr %in% names(d_föräldrar)) %>% 
+  write_csv("results/Parenting_itemnr.csv")
+
+d_test_föräldrar %>% 
+  select(!any_of(removed_items)) %>% 
+  RIitemparams()
+
+d_test_föräldrar %>% 
+  select(!any_of(removed_items)) %>% 
+  RIitemparams(output = "file", filename = "results/Parenting_itemparams.csv")
+```
+
+### Targeting
+
+```{r}
+#| fig-height: 4
+d_test_föräldrar %>% 
+  select(!any_of(removed_items)) %>% 
+  RItargeting()
+```
+
+### Person fit
+
+```{r}
+d_test_föräldrar %>% 
+  select(!any_of(removed_items)) %>% 
+  RIpfit()
+```
+
+
+### Summerande kommentar
+
+Reliabilitet mycket dålig, targeting mycket dålig. Det som är bra är att skalan mäter en dimension och att det inte finns några beroende/korrelationer mellan items. 
+
+```{r}
+#| column: margin
+#| echo: false
+
+RIlistItemsMargin(d_föräldrar)
+```
+
+```{r}
+removed_items <- c("f83d", "f83b", "F79", "F80", "F81", "f83f", "f83a", "F58", "f83e")
+itemlabels %>% 
+  filter(itemnr %in% removed_items) %>% 
+  kbl_rise()
+```
+
+
+## Analys 1 - negativa items
+
+Vi behåller nu bara negativa items 
+
+```{r}
+removed_items <- c("f83a", "f83c", "f83e", "f83g", "f83h", "F82")
+itemlabels %>% 
+  filter(itemnr %in% removed_items) %>% 
+  kbl_rise()
+```
+
+```{r}
+#d_backup_föräldrar <- d_föräldrar
+
+d_negativa <- d_backup_föräldrar %>% 
+  select(!any_of(removed_items))
+```
+
+```{r}
+#| column: margin
+#| echo: false
+RIlistItemsMargin(d_negativa)
+```
+
+::: panel-tabset
+### Mokken dimensionality
+```{r}
+aisp(d_negativa) %>% 
+  as.data.frame() %>% 
+  set_names("h > 0.3") %>% 
+  arrange(`h > 0.3`) %>% 
+  kbl_rise(tbl_width = 20)
+```
+### Item-restscore
+```{r}
+d_negativa %>% 
+  select(!any_of(removed_items)) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+RIrestscore(d_negativa)
+```
+### PCA
+```{r}
+#| tbl-cap: "PCA of Rasch model residuals"
+RIpcmPCA(d_negativa)
+```
+### Loadings 1st contrast
+```{r}
+#| label: fig-loadloc1b
+RIloadLoc(d_negativa)
+```
+### Lokalt oberoende
+```{r}
+RIpartgamLD(d_negativa)
+```
+### Residualkorrelationer
+```{r}
+#| label: tbl-rescoreskola1b
+simcor1b <- RIgetResidCor(d_negativa, iterations = 500, cpu = 8)
+
+RIresidcorr(d_negativa, cutoff = simcor1b$p99)
+```
+### Targeting
+```{r}
+#| fig-height: 9
+RItargeting(d_negativa)
+```
+### Itemhierarki
+```{r}
+#| fig-height: 9
+RIitemHierarchy(d_negativa)
+```
+### Svarskategorier
+```{r}
+mirt(d_negativa, model=1, itemtype='Rasch', verbose = FALSE) %>% 
+  plot(type="trace", as.table = TRUE, 
+       theta_lim = c(-5,5))
+```
+### DIF kön
+```{r}
+RIpartgamDIF(d_negativa, d_dif_föräldrar$Kön)
+RIdifTableLR(d_negativa, d_dif_föräldrar$Kön)
+RIdifThreshFigLR(d_negativa, d_dif_föräldrar$Kön)
+```
+### DIF årskurs
+```{r}
+RIpartgamDIF(d_negativa, d_dif_föräldrar$Årskurs)
+RIdifTableLR(d_negativa, d_dif_föräldrar$Årskurs)
+RIdifThreshFigLR(d_negativa, d_dif_föräldrar$Årskurs)
+```
+:::
+
+- Mokken-analysen visar värde 0 för f83d och F58, värde 1 för F79, F80 och F81 samt värde 2 för f83b och f83f
+- Item-restscore boostrap flaggar F58 som starkt underfit (99.5), F79 som starkt overfit (99.5)
+- Itemrestscore flaggar F79, F80 och F58 som statistiskt signifikanta på 0.01
+- PCA av residualer visar 1.77 som högsta eigenvalue 
+- Figuren med faktorladdningar på första residualkontrasten (loadloc) visar två olika kluster med F79, F80 och F58 som ett och f83b, f83d och f83f som ett
+- Lokala beroenden (partial gamma) visar beroenden mellan F79 och F80, f83f och f83b och F80 och F81
+- Residualkorrelationer bekräftar dessa korrelationer
+- Targeting helt ok men visar en del golveffekter
+- Itemhierarki visar oordnade svarskategorier för F79
+- Näst högsta svarskategorin ej representerad hos F79
+
+- DIF kön flaggas för F80 och F58. Inget på DIF årskurs
+
+Slutsats: F58 passar inte in just nu. Tar bort den och F79 som har hög overfit, korrelerar starkt med F80 och som också har oordnade svarskategorier.
+
+```{r}
+removed_items <- c("f83a", "f83c", "f83e", "f83g", "f83h", "F82", "F58", "F79")
+itemlabels %>% 
+  filter(itemnr %in% removed_items) %>% 
+  kbl_rise()
+```
+
+```{r}
+#d_backup_föräldrar <- d_föräldrar
+
+d_negativa <- d_negativa %>% 
+  select(!any_of(removed_items))
+```
+
+## Analys 2 - negativa items
+
+```{r}
+#| column: margin
+#| echo: false
+RIlistItemsMargin(d_negativa)
+```
+
+::: panel-tabset
+### Mokken dimensionality
+```{r}
+aisp(d_negativa) %>% 
+  as.data.frame() %>% 
+  set_names("h > 0.3") %>% 
+  arrange(`h > 0.3`) %>% 
+  kbl_rise(tbl_width = 20)
+```
+### Conditional infit
+```{r}
+simfit2b <- RIgetfit(d_negativa, iterations = 200, cpu = 8)
+RIitemfit(d_negativa, simfit2b)
+```
+### Item-restscore
+```{r}
+d_negativa %>% 
+  select(!any_of(removed_items)) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+RIrestscore(d_negativa)
+```
+### PCA
+```{r}
+#| tbl-cap: "PCA of Rasch model residuals"
+RIpcmPCA(d_negativa)
+```
+### Loadings 1st contrast
+```{r}
+#| label: fig-loadloc2b
+RIloadLoc(d_negativa)
+```
+### Lokalt oberoende
+```{r}
+RIpartgamLD(d_negativa)
+```
+### Residualkorrelationer
+```{r}
+#| label: tbl-rescoreskola2b
+simcor2b <- RIgetResidCor(d_negativa, iterations = 500, cpu = 8)
+
+RIresidcorr(d_negativa, cutoff = simcor2b$p99)
+```
+### Targeting
+```{r}
+#| fig-height: 9
+RItargeting(d_negativa)
+```
+### Itemhierarki
+```{r}
+#| fig-height: 9
+RIitemHierarchy(d_negativa)
+```
+### Svarskategorier
+```{r}
+mirt(d_negativa, model=1, itemtype='Rasch', verbose = FALSE) %>% 
+  plot(type="trace", as.table = TRUE, 
+       theta_lim = c(-5,5))
+```
+### DIF kön
+```{r}
+RIpartgamDIF(d_negativa, d_dif_föräldrar$Kön)
+RIdifTableLR(d_negativa, d_dif_föräldrar$Kön)
+```
+### DIF årskurs
+```{r}
+RIpartgamDIF(d_negativa, d_dif_föräldrar$Årskurs)
+RIdifTableLR(d_negativa, d_dif_föräldrar$Årskurs)
+```
+:::
+
+- Mokken-analysen visar värde 0 för f83d och värde 1 för f83b och f83f och värde 2 för F80 och F81
+- Conditional infit visar lågt på f83f och högt på F81
+- Item-restscore boostrap flaggar inte några stora värden på underfit och overfit
+- Itemrestscore flaggar F81 och f83f som statistiskt signifikanta på 0.05
+- PCA av residualer visar 1.66 som högsta eigenvalue 
+- Figuren med faktorladdningar på första residualkontrasten (loadloc) visar två olika kluster att F80 och F81 sticker ut något
+- Lokala beroenden (partial gamma) visar beroenden mellan F80 och F81, och svagt mellan f83f och f83b
+- Residualkorrelationer bekräftar dessa korrelationer
+- Targeting helt ok men visar en del golveffekter
+- Itemhierarki visar inga oordnade svarskategorier
+- Svarskategorier inget att anmärka på
+
+- DIF kön flaggas för F80. Inget på DIF årskurs
+
+Slutsats:Fortsatt stark korrelation mellan F80 och F81. Tar bort F81 då den minst passar in bland övriga samt visar svagt underfit.
+
+
+```{r}
+removed_items <- c("f83a", "f83c", "f83e", "f83g", "f83h", "F82", "F58", "F79", "F81")
+itemlabels %>% 
+  filter(itemnr %in% removed_items) %>% 
+  kbl_rise()
+```
+
+```{r}
+#d_backup_föräldrar <- d_föräldrar
+
+d_negativa <- d_negativa %>% 
+  select(!any_of(removed_items))
+
+d_föräldrar <- d_backup_föräldrar %>% 
+  select(!any_of(removed_items))
+```
+
+## Analys 3 - negativa items
+
+```{r}
+#| column: margin
+#| echo: false
+RIlistItemsMargin(d_negativa)
+```
+
+::: panel-tabset
+### Mokken dimensionality
+```{r}
+aisp(d_negativa) %>% 
+  as.data.frame() %>% 
+  set_names("h > 0.3") %>% 
+  arrange(`h > 0.3`) %>% 
+  kbl_rise(tbl_width = 20)
+```
+### Conditional infit
+```{r}
+simfit3b <- RIgetfit(d_negativa, iterations = 200, cpu = 8)
+RIitemfit(d_negativa, simfit3b)
+```
+### Item-restscore
+```{r}
+d_negativa %>% 
+  select(!any_of(removed_items)) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+RIrestscore(d_negativa)
+```
+### PCA
+```{r}
+#| tbl-cap: "PCA of Rasch model residuals"
+RIpcmPCA(d_negativa)
+```
+### Loadings 1st contrast
+```{r}
+#| label: fig-loadloc3b
+RIloadLoc(d_negativa)
+```
+### Lokalt oberoende
+```{r}
+RIpartgamLD(d_negativa)
+```
+### Residualkorrelationer
+```{r}
+#| label: tbl-rescoreskola3b
+simcor3b <- RIgetResidCor(d_negativa, iterations = 500, cpu = 8)
+
+RIresidcorr(d_negativa, cutoff = simcor3b$p99)
+```
+### Targeting
+```{r}
+#| fig-height: 9
+RItargeting(d_negativa)
+```
+### Itemhierarki
+```{r}
+#| fig-height: 9
+RIitemHierarchy(d_negativa)
+```
+### Svarskategorier
+```{r}
+mirt(d_negativa, model=1, itemtype='Rasch', verbose = FALSE) %>% 
+  plot(type="trace", as.table = TRUE, 
+       theta_lim = c(-5,5))
+```
+### DIF kön
+```{r}
+RIpartgamDIF(d_negativa, d_dif_föräldrar$Kön)
+RIdifTableLR(d_negativa, d_dif_föräldrar$Kön)
+```
+### DIF årskurs
+```{r}
+RIpartgamDIF(d_negativa, d_dif_föräldrar$Årskurs)
+RIdifTableLR(d_negativa, d_dif_föräldrar$Årskurs)
+```
+:::
+
+- Mokken-analysen visar värde 0 för F80 och f83d och värde 1 för f83b och f83f
+- Conditional infit visar lågt på f83f och f83b och högt på F80
+- Item-restscore boostrap flaggar inte några stora värden på underfit och overfit, men F80 har 26 i underfit och f83b har 33 i overfit och f83f har 23 i overfit
+- Itemrestscore flaggar F80, f83b och f83f som statistiskt signifikanta på 0.01
+- PCA av residualer visar 1.49 som högsta eigenvalue 
+- Figuren med faktorladdningar på första residualkontrasten (loadloc) visar att F80 sticker ut något
+- Lokala beroenden (partial gamma) visar inga beroenden längre, men ett svagt mellan f83f och f83b 
+- Residualkorrelationer bekräftar svag korrelation mellan f83b och f83f
+- Targeting helt ok men visar en del golveffekter
+- Itemhierarki visar inga oordnade svarskategorier
+- Svarskategorier inget att anmärka på
+
+- DIF kön flaggas för F80. Inget på DIF årskurs
+
+Slutsats:Inte en kombination där man helt kan dra slutsatser att det inte förekommer multidimensionalitet. Testar att lägga till f83c och F58 till denna kombo i omgångar.
+
+### Reliabilitet
+
+```{r}
+d_test_föräldrar %>% 
+  select(!any_of(removed_items)) %>% 
+  RItif(samplePSI = T)
+```
+
+### Item-parametrar
+
+```{r}
+itemlabels %>% 
+  filter(itemnr %in% names(d_föräldrar)) %>% 
+  write_csv("results/Parenting_itemnr.csv")
+
+d_test_föräldrar %>% 
+  select(!any_of(removed_items)) %>% 
+  RIitemparams()
+
+d_test_föräldrar %>% 
+  select(!any_of(removed_items)) %>% 
+  RIitemparams(output = "file", filename = "results/Parenting_itemparams.csv")
+```
+
+
+### Targeting
+
+```{r}
+d_test_föräldrar %>% 
+  select(!any_of(removed_items)) %>% 
+  RItargeting()
+```
+
+### Person fit
+
+```{r}
+d_test_föräldrar %>% 
+  select(!any_of(removed_items)) %>% 
+  RIpfit()
+```
+
+```{r}
+removed_items <- c("f83a", "f83c", "f83e", "f83g", "f83h", "F82", "F79", "F81")
+itemlabels %>% 
+  filter(itemnr %in% removed_items) %>% 
+  kbl_rise()
+```
+
+```{r}
+#d_backup_föräldrar <- d_föräldrar
+
+d_negativa <- d_backup_föräldrar %>% 
+  select(!any_of(removed_items))
+
+d_test_negativa <- d_test %>% 
+  select(!any_of(removed_items))
+```
+
+## Analys 4 - negativa items
+
+```{r}
+#| column: margin
+#| echo: false
+RIlistItemsMargin(d_negativa)
+```
+
+::: panel-tabset
+### Mokken dimensionality
+```{r}
+aisp(d_negativa) %>% 
+  as.data.frame() %>% 
+  set_names("h > 0.3") %>% 
+  arrange(`h > 0.3`) %>% 
+  kbl_rise(tbl_width = 20)
+```
+### Conditional infit
+```{r}
+simfit4b <- RIgetfit(d_negativa, iterations = 200, cpu = 8)
+RIitemfit(d_negativa, simfit4b)
+```
+### Item-restscore
+```{r}
+d_negativa %>% 
+  select(!any_of(removed_items)) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+RIrestscore(d_negativa)
+```
+### PCA
+```{r}
+#| tbl-cap: "PCA of Rasch model residuals"
+RIpcmPCA(d_negativa)
+```
+### Loadings 1st contrast
+```{r}
+#| label: fig-loadloc4b
+RIloadLoc(d_negativa)
+```
+### Lokalt oberoende
+```{r}
+RIpartgamLD(d_negativa)
+```
+### Residualkorrelationer
+```{r}
+#| label: tbl-rescoreskola4b
+simcor4b <- RIgetResidCor(d_negativa, iterations = 500, cpu = 8)
+
+RIresidcorr(d_negativa, cutoff = simcor4b$p99)
+```
+### Targeting
+```{r}
+#| fig-height: 9
+RItargeting(d_negativa)
+```
+### Itemhierarki
+```{r}
+#| fig-height: 9
+RIitemHierarchy(d_negativa)
+```
+### Svarskategorier
+```{r}
+mirt(d_negativa, model=1, itemtype='Rasch', verbose = FALSE) %>% 
+  plot(type="trace", as.table = TRUE, 
+       theta_lim = c(-5,5))
+```
+### DIF kön
+```{r}
+RIpartgamDIF(d_negativa, d_dif_föräldrar$Kön)
+RIdifTableLR(d_negativa, d_dif_föräldrar$Kön)
+```
+### DIF årskurs
+```{r}
+RIpartgamDIF(d_negativa, d_dif_föräldrar$Årskurs)
+RIdifTableLR(d_negativa, d_dif_föräldrar$Årskurs)
+```
+:::
+
+- Mokken-analysen visar värde 0 för F80 och f83d och värde 1 för f83b och f83f
+- Conditional infit visar lågt på f83f och f83b och högt på F80
+- Item-restscore boostrap flaggar inte några stora värden på underfit och overfit, men F80 har 26 i underfit och f83b har 33 i overfit och f83f har 23 i overfit
+- Itemrestscore flaggar F80, f83b och f83f som statistiskt signifikanta på 0.01
+- PCA av residualer visar 1.49 som högsta eigenvalue 
+- Figuren med faktorladdningar på första residualkontrasten (loadloc) visar att F80 sticker ut något
+- Lokala beroenden (partial gamma) visar inga beroenden längre, men ett svagt mellan f83f och f83b 
+- Residualkorrelationer bekräftar svag korrelation mellan f83b och f83f
+- Targeting helt ok men visar en del golveffekter
+- Itemhierarki visar inga oordnade svarskategorier
+- Svarskategorier inget att anmärka på
+
+- DIF kön flaggas för F80. Inget på DIF årskurs
+
+Slutsats:Inte en kombination där man helt kan dra slutsatser att det inte förekommer multidimensionalitet. Testar att lägga till f83c och F58 till denna kombo i omgångar.
+
+### DIF över årtal
+
+::: panel-tabset
+#### Data prep
+```{r}
+df_r2 %>% 
+  select(F80, f83b, f83d, f83f, F58, År) %>% 
+  count(År)
+
+difdata <- df_r2 %>% 
+  select(F80, f83b, f83d, f83f, F58, År) %>% 
+  filter(År > 2012) %>% 
+  na.omit()
+
+difdata %>% 
+  count(År)
+
+dif_år <- difdata$År
+difdata$År <- NULL
+```
+
+#### DIF tabell
+```{r}
+RIdifTable(difdata,dif_år)
+```
+#### DIF figur
+```{r}
+RIdifFigure(difdata,dif_år) +
+  scale_y_continuous(limits = c(-2,2))
+```
+:::
+
+### Reliabilitet
+
+```{r}
+#| fig-height: 4
+d_test_föräldrar %>% 
+  select(!any_of(removed_items)) %>% 
+  RItif(samplePSI = T)
+```
+
+### Item-parametrar
+
+```{r}
+itemlabels %>% 
+  filter(itemnr %in% names(d_test_föräldrar)) %>% 
+  write_csv("results/Parenting_itemnr.csv")
+
+d_test_föräldrar %>% 
+  select(!any_of(removed_items)) %>% 
+  RIitemparams()
+
+d_test_föräldrar %>% 
+  select(!any_of(removed_items)) %>% 
+  RIitemparams(output = "file", filename = "results/Parenting_itemparams.csv")
+```
+
+
+### Targeting
+
+```{r}
+#| fig-height: 4
+d_test_föräldrar %>% 
+  select(!any_of(removed_items)) %>% 
+  RItargeting()
+```
+
+### Person fit
+
+```{r}
+d_test_föräldrar %>% 
+  select(!any_of(removed_items)) %>% 
+  RIpfit()
+```
+
+### Summerande kommentar
+
+
+
+## Programvara som använts
+```{r}
+#| label: packagesv
+sessionInfo()
+```

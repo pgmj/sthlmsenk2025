@@ -1,0 +1,1116 @@
+---
+title: "Skolfaktorer negativa"
+title-block-banner: "#009ca6"
+title-block-banner-color: "#FFFFFF"
+date: last-modified
+format: html
+execute:
+  echo: true
+  warning: false
+  message: false
+  cache: true
+editor_options: 
+  markdown: 
+    wrap: 72
+  chunk_output_type: console
+---
+
+```{r}
+#| label: recodeImport
+#| include: false
+
+# for (i in skola.positiva) {
+#   df[[i]]<-recode(df[[i]],"smb=0;sgb=1;sgd=2;smd=3",as.factor=FALSE)
+# }
+# 
+# for (i in skola.negativa) {
+#   df[[i]]<-recode(df[[i]],"smb=3;sgb=2;sgd=1;smd=0",as.factor=FALSE)
+# }
+# 
+# for (i in c("F55","F56","F59")){
+#   df[[i]]<-recode(df[[i]],"'Nej'=0;
+#                'Ja, 1 gång'=1;
+#                'Ja, 2-3 gånger'=2;
+#                'Ja, 4-10 gånger'=3;
+#                'Ja, 11-20 gånger'=4;
+#                'Ja, mer än 20 gånger'=5;
+#                '<NA>'=NA",
+#                  as.factor=FALSE)
+# }
+
+### Additional item
+# Hur ofta har du blivit mobbad eller trakasserad i skolan det här läsåret?
+# df$F61<-recode(df$F61,"'Jag har inte blivit mobbad'=0;
+#                'Det har hänt någon enstaka gång'=1;
+#                '2 eller 3 gånger i månaden'=2;
+#                'Ungefär en gång i veckan'=3;
+#                'Flera gånger i veckan'=4;
+#                '<NA>'=NA;
+#                'Ska ej besvaras'=NA",
+#                as.factor=FALSE)
+
+#skola.negativa <- c("f54e", "f54f", "f54i", "f54k", "f54m", "f54o", "f54q")
+#skola.positiva <- c("f54a", "f54b", "f54c", "f54d", "f54g", "f54h", "f54j", "f54l", "f54n", "f54p", "f54r")
+
+```
+
+```{r}
+#| label: setup
+#| include: false
+
+knitr::opts_chunk$set(echo = TRUE, cache = FALSE)
+library(mokken)
+library(arrow)
+library(ggrepel)
+library(car)
+library(grateful) 
+library(kableExtra)
+library(readxl)
+library(tidyverse)
+library(eRm)
+library(mirt)
+library(iarm)
+library(psych)
+library(ggplot2)
+library(psychotree)
+library(matrixStats)
+library(reshape)
+library(knitr)
+library(patchwork)
+library(formattable) 
+library(easyRasch) # devtools::install_github("pgmj/easyRasch")
+library(glue)
+library(foreach)
+#library(foreign)
+library(haven)
+library(labelled)
+
+
+### some commands exist in multiple packages, here we define preferred ones that are frequently used
+select <- dplyr::select
+count <- dplyr::count
+recode <- car::recode
+rename <- dplyr::rename
+filter <- dplyr::filter
+
+# import item information
+itemlabels <- read_excel("itemlabels/Skola_itemlabels.xls")
+
+# where is the data? This is for Mac
+datafolder <- "~/Library/CloudStorage/OneDrive-SharedLibraries-RISE/SHIC - Data i Dialog - Data i Dialog/data/"
+# add windows path below
+#datafolder <- "C:/Users/fridasan/RISE/SHIC - Data i Dialog - 2024/"
+
+#sthlm <- read_spss(paste0(datafolder,"Stockholm Stad/2024/Stockholmsenkäten 2002-2024 Stockholm.sav"))
+#write_parquet(sthlm, paste0(datafolder,"Stockholm Stad/2024/sthlm02-24.parquet"))
+
+df.all <- read_parquet(paste0(datafolder,"Stockholm Stad/2024/sthlm02-24.parquet"))
+#df.all <- read_parquet(paste0(datafolder,"sthlm02-24.parquet"))
+
+# subset data for this analysis
+df <- df.all %>% 
+  select(all_of(itemlabels$itemnr),Kön,ARSKURS,ar,SkolSDO)
+
+```
+
+```{r}
+#| label: recoderawdata
+#| include: false
+
+# ###### Skolfaktorer
+# # koda om svaren för items som ingår i individfaktorer, F66a-F66u i data, fråga 67 i PDF
+# # variabler df[191:211]
+# # hög poäng = hög risk
+# # definiera svarskategorierna för att förenkla recode-koden
+smd <- "Stämmer mycket dåligt"
+sgd <- "Stämmer ganska dåligt"
+sgb <- "Stämmer ganska bra"
+smb <- "Stämmer mycket bra"
+
+### New recode code below, using variable names instead of numbering
+
+
+skola.negativa <- c("f54e", "f54f", "f54i", "f54k", "f54m", "f54o", "f54q")
+skola.positiva <- c("f54a", "f54b", "f54c", "f54d", "f54g", "f54h", "f54j", "f54l", "f54n", "f54p", "f54r")
+
+skola.delskala <- c("F55", "F56", "F59")
+
+df_recoded <- df %>%
+  mutate(across(f54a:F59, ~ as.numeric(.x))) %>%
+  mutate(across(skola.negativa, ~ .x - 1),
+         across(skola.positiva, ~ car::recode(.x, "4=0;3=1;2=2;1=3")))
+
+df_recoded <- df_recoded %>% 
+  mutate(across(skola.delskala, ~ car::recode(as.numeric(.x), "6=5;5=4;4=3;3=2;2=1;1=0")))
+
+#attr(df_recoded$F61, "label") <- NULL
+
+```
+
+Recode 99 and 999 to NA and make demographic variables to factors.
+
+```{r}
+df_r2 <- df_recoded %>% 
+  mutate(SkolSDO = factor(SkolSDO, levels = val_labels(df_recoded$SkolSDO),
+                          labels = names(val_labels(df_recoded$SkolSDO)))) %>% 
+  mutate(Årskurs = factor(ARSKURS, levels = val_labels(df_recoded$ARSKURS),
+                          labels = names(val_labels(df_recoded$ARSKURS)))) %>% 
+  select(!ARSKURS) %>% 
+  mutate(SkolSDO = car::recode(SkolSDO,"99=NA;'Övrigt ospecificerat'=NA"),
+         Årskurs = car::recode(Årskurs,"999=NA")) %>% 
+  mutate(Kön = factor(Kön, levels = 1:2, labels = c("Pojke","Flicka")),
+         År = as.numeric(ar)) %>% 
+  select(!ar)
+```
+
+```{r}
+df_r2 %>% 
+  select(f54a:F59) %>% 
+  pivot_longer(everything()) %>% 
+  distinct(value)
+```
+
+```{r}
+library(rsample)
+set.seed(14578)
+# create dataframe with 2024 data with all variables (post recode) and only complete responses
+df24 <- df_r2 %>% 
+  filter(År == 2024) %>% 
+  na.omit() %>% 
+  select(!År)
+
+# Put 1/5 of the data into the training set 
+data_split <- initial_split(df24, prop = 1/5, strata = SkolSDO)
+
+# Create data frames for the two sets:
+d <- training(data_split)
+d_test  <- testing(data_split)
+
+# create separate dataframes
+d_pos <- d %>% 
+  select(Kön, Årskurs, SkolSDO, any_of(skola.positiva))
+
+d_test_pos <- d_test %>% 
+  select(Kön, Årskurs, SkolSDO, any_of(skola.positiva))
+
+d_neg <- d %>% 
+  select(Kön, Årskurs, SkolSDO, any_of(skola.negativa))
+
+d_test_neg <- d_test %>% 
+  select (Kön, Årskurs, SkolSDO, any_of(skola.negativa))
+
+d_delskala <- d %>% 
+  select(Kön, Årskurs, SkolSDO, any_of(skola.delskala))
+
+d_test_delskala <- d_test %>% 
+  select (Kön, Årskurs, SkolSDO, any_of(skola.delskala))
+
+# create DIF df
+d_dif <- d %>% 
+  select(Kön,Årskurs,SkolSDO)
+
+d_testdif <- d_test %>% 
+  select(Kön,Årskurs,SkolSDO)
+
+# create separate DIF dataframes
+d_dif_pos <- d_pos %>% 
+  select(Kön,Årskurs,SkolSDO)
+
+d_testdif_pos <- d_test_pos %>% 
+  select(Kön,Årskurs,SkolSDO)
+
+d_dif_neg <- d_neg %>% 
+  select(Kön,Årskurs,SkolSDO)
+
+d_testdif_neg <- d_test_neg %>% 
+  select(Kön,Årskurs,SkolSDO)
+
+d_dif_delskala <- d_delskala %>% 
+  select(Kön,Årskurs,SkolSDO)
+
+d_testdif_delskala <- d_test_delskala %>% 
+  select(Kön,Årskurs,SkolSDO)
+
+# remove non-items
+d <- d %>% 
+  select(!c(Kön,Årskurs,SkolSDO))
+d_test <- d_test %>% 
+  select(!c(Kön,Årskurs,SkolSDO))
+
+d_pos <- d_pos %>% 
+  select(!c(Kön,Årskurs,SkolSDO))
+d_test_pos <- d_test_pos %>% 
+  select(!c(Kön,Årskurs,SkolSDO))
+
+d_neg <- d_neg %>% 
+  select(!c(Kön,Årskurs,SkolSDO))
+d_test_neg <- d_test_neg %>% 
+  select(!c(Kön,Årskurs,SkolSDO))
+
+d_delskala <- d_delskala %>% 
+  select(!c(Kön,Årskurs,SkolSDO))
+d_test_delskala <- d_test_delskala %>% 
+  select(!c(Kön,Årskurs,SkolSDO))
+
+```
+
+
+## Frågor i enkäten
+
+Item/frågor har etiketter f54a-f54r i datafilen, och motsvaras av fråga 55 i PDF-filen med frågor.
+
+"Hur väl stämmer följande påståenden in på din skolsituation?" följs av de ingående frågorna, alla med samma fyra svarskategorier:
+
+* 'Stämmer mycket dåligt'
+* 'Stämmer ganska dåligt'
+* 'Stämmer ganska bra'
+* 'Stämmer mycket bra'
+
+Svarskategorierna ersätts med siffror från 0 till 3, och för f54a, b, c, d, g, h, j, l, n, p och r är siffrorna omvända/reverserade, d.v.s. att "Stämmer mycket bra" kodas som "0" i stället för "3" till analysen. Det innebär att höga poäng genomgående innebär hög risk. Datan sepaeras i olika mått, de som är positiva och de som är negativa
+
+## Deskriptiva data
+
+### Demografi
+
+```{r}
+#| label: descriptives1
+#| layout-ncol: 2
+RIdemographics(d_dif$Kön, "Kön")
+RIdemographics(d_dif$Årskurs, "Årskurs")
+RIdemographics(d_testdif$SkolSDO, "SkolSDO")
+```
+
+### Item-data Skola negativ
+
+::: panel-tabset
+#### Tile plot
+```{r}
+RItileplot(d_neg)
+```
+#### Stacked bars
+```{r}
+RIbarstack(d_neg)
+```
+:::
+
+## Analys 1 negativa items
+
+```{r}
+#| column: margin
+#| echo: false
+RIlistItemsMargin(d_neg)
+```
+
+::: panel-tabset
+### Mokken dimensionality
+```{r}
+aisp(d_neg) %>% 
+  as.data.frame() %>% 
+  set_names("h > 0.3") %>% 
+  arrange(`h > 0.3`) %>% 
+  kbl_rise(tbl_width = 20)
+```
+
+### Item-restscore
+```{r}
+d_test_neg %>% 
+  #select(!any_of(removed_items)) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+RIrestscore(d_neg)
+```
+### PCA
+```{r}
+#| tbl-cap: "PCA of Rasch model residuals"
+RIpcmPCA(d_neg)
+```
+### Loadings 1st contrast
+```{r}
+#| label: fig-loadloc11
+RIloadLoc(d_neg)
+```
+### Lokalt oberoende
+```{r}
+RIpartgamLD(d_neg)
+```
+### Targeting
+```{r}
+#| fig-height: 9
+RItargeting(d_neg)
+```
+### Itemhierarki
+```{r}
+#| fig-height: 9
+RIitemHierarchy(d_neg)
+```
+### Svarskategorier
+```{r}
+mirt(d_neg, model=1, itemtype='Rasch', verbose = FALSE) %>% 
+  plot(type="trace", as.table = TRUE, 
+       theta_lim = c(-5,5))
+```
+### DIF kön
+```{r}
+RIpartgamDIF(d_neg, d_dif_neg$Kön)
+RIdifTableLR(d_neg, d_dif_neg$Kön)
+#| fig-height: 4
+RIdifThreshFigLR(d_neg, d_dif_neg$Kön)
+```
+### DIF årskurs
+```{r}
+RIpartgamDIF(d_neg, d_dif_neg$Årskurs)
+RIdifTableLR(d_neg, d_dif_neg$Årskurs)
+#| fig-height: 4
+RIdifThreshFigLR(d_neg, d_dif_neg$Årskurs)
+```
+:::
+
+- Mokken-analysen indikerar värde 1 för f54f, k, m och q, värde två för f54e och i och noll för f54o som inte passar in bland övriga.
+- Item-restscore boostrap flaggar f54i som starkt underfit, f54k  och f är starkt overfit och f54q något overfit. 
+- Itemrestscore flaggar f54f, i och k signifikanta på 0.01       och f54q på 0.1.
+- PCA av residualer visar 1.54 som högsta eigenvalue
+- Figuren med faktorladdningar på första residualkontrasten (loadloc) visar eventuellt att f54i och f54o sticker ut något jämfört med övriga
+- Lokala beroenden (partial gamma) visar starka beroenden på f54f och q, f54e och i och f54k och m. 
+- Targeting halvbra men gap i trösklar i mitten av skalan
+- Itemhierarki visar inte så bra spridning men inga oordnade svarskategorier
+
+- Svarskategorier ok förutom mittenkategorierna på f54o som inte täcks
+
+- DIF för kön flaggas för f54q (partial gamma). Inget på årskurs
+
+Slutsats: f54o problematisk pga 0 i mokken (?), f54i pga underfit och lokalt beroende med f54e, sticker ut på faktorladdningar, f54f pga mkt overfit och lokalt beroende med f54q, och f54k pga overfit och lokalt beroende med f54m. Börjar med att ta bort f54i.
+
+```{r}
+removed_items <- c("f54i")
+itemlabels %>% 
+  filter(itemnr %in% removed_items) %>% 
+  kbl_rise()
+```
+
+```{r}
+d_backup_neg <- d_neg
+
+d_neg <- d_neg %>% 
+  select(!any_of(removed_items))
+```
+
+## Omkodning av svarskategorier
+```{r}
+d_neg <- d_neg %>%
+  mutate(across(any_of(c("f54o")), ~ car::recode(.x, "0=0; 1=1; 2=1; 3=2")))
+d_test_neg <- d_test_neg %>%
+  mutate(across(any_of(c("f54o")), ~ car::recode(.x, "0=0; 1=1; 2=1; 3=2")))
+#d_neg %>% count(f86j)
+
+mirt(d_neg, model=1, itemtype='Rasch', verbose = FALSE) %>% 
+  plot(type="trace", as.table = TRUE, 
+       theta_lim = c(-5,5))
+```
+
+Utan item f54i och omkodade svarskategorier för f54o.
+
+
+## Analys 2 negativa items
+
+```{r}
+#| column: margin
+#| echo: false
+RIlistItemsMargin(d_neg)
+```
+
+::: panel-tabset
+### Mokken dimensionality
+```{r}
+aisp(d_neg) %>% 
+  as.data.frame() %>% 
+  set_names("h > 0.3") %>% 
+  arrange(`h > 0.3`) %>% 
+  kbl_rise(tbl_width = 20)
+```
+### Conditional infit
+```{r}
+simfit2neg <- RIgetfit(d_neg, iterations = 200, cpu = 8)
+RIitemfit(d_neg, simfit2neg)
+```
+### Item-restscore
+```{r}
+d_test_neg %>% 
+  select(!any_of(removed_items)) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+RIrestscore(d_neg)
+```
+### PCA
+```{r}
+#| tbl-cap: "PCA of Rasch model residuals"
+RIpcmPCA(d_neg)
+```
+### Loadings 1st contrast
+```{r}
+#| label: fig-loadloc22
+RIloadLoc(d_neg)
+```
+### Lokalt oberoende
+```{r}
+RIpartgamLD(d_neg)
+```
+### Residualkorrelationer
+```{r}
+#| label: tbl-rescoreskola2neg
+simcor2neg <- RIgetResidCor(d_neg, iterations = 500, cpu = 8)
+
+RIresidcorr(d_neg, cutoff = simcor2neg$p99)
+```
+### Targeting
+```{r}
+#| fig-height: 9
+RItargeting(d_neg)
+```
+### Itemhierarki
+```{r}
+#| fig-height: 9
+RIitemHierarchy(d_neg)
+```
+### Conditional LRT
+```{r}
+clr_tests(d_neg, model = "PCM")
+RIbootLRT(d_neg, samplesize = 500, cpu = 8)
+```
+### Svarskategorier
+```{r}
+mirt(d_neg, model=1, itemtype='Rasch', verbose = FALSE) %>% 
+  plot(type="trace", as.table = TRUE, 
+       theta_lim = c(-5,5))
+```
+### DIF kön
+```{r}
+RIpartgamDIF(d_neg, d_dif_neg$Kön)
+RIdifTableLR(d_neg, d_dif_neg$Kön)
+```
+### DIF årskurs
+```{r}
+RIpartgamDIF(d_neg, d_dif_neg$Årskurs)
+RIdifTableLR(d_neg, d_dif_neg$Årskurs)
+```
+:::
+
+- Mokken-analysen indikerar värde 1 för f54f, k, m och q, värde två för f54e och numera 54o som i första analysen var 0?
+- Conditional infit flaggar på f54e, f och k, m och o
+- Item-restscore boostrap flaggar nu f54e som underfit och f54m som svagt underfit. F54k  och f är starkt overfit och f54q något overfit. 
+- Itemrestscore flaggar f54e, f och k signifikanta på 0.01  
+- PCA av residualer visar 1.46 som högsta eigenvalue
+- Figuren med faktorladdningar på första residualkontrasten (loadloc) visar eventuellt att f54o sticker ut något jämfört med övriga
+- Lokala beroenden (partial gamma) visar starka beroenden på f54f och q
+- Residualkorrelationer (svaga) mellan f54q och f, f54k och m samt f54o och e
+- Targeting halvbra men gap i trösklar i mitten av skalan
+- Itemhierarki visar inte så bra spridning men inga oordnade svarskategorier
+- Conditional LRT visar 83% statistikt signifikanta observationer
+
+- Svarskategorier ok förutom mittenkategorierna på f54o som inte täcks
+
+- DIF för kön flaggas för f54q (partial gamma). Inget på årskurs
+
+Slutsats: f54f och f54q har beroenden och korrelationer. F54f har dessutom problem med overfit, precis som f54k. F54o sticker också ut mkt på faktorladdningarna. Fortsätter med att ta bort f54q pga formuleringen på påståendet är underligt.
+
+```{r}
+removed_items <- c("f54i", "f54q")
+itemlabels %>% 
+  filter(itemnr %in% removed_items) %>% 
+  kbl_rise()
+```
+
+
+```{r}
+#d_backup_neg <- d_neg
+
+d_neg <- d_neg %>% 
+  select(!any_of(removed_items))
+```
+
+Utan items f54i och f54q
+
+## Analys 3 negativa items
+
+```{r}
+#| column: margin
+#| echo: false
+RIlistItemsMargin(d_neg)
+```
+
+::: panel-tabset
+### Mokken dimensionality
+```{r}
+aisp(d_neg) %>% 
+  as.data.frame() %>% 
+  set_names("h > 0.3") %>% 
+  arrange(`h > 0.3`) %>% 
+  kbl_rise(tbl_width = 20)
+```
+### Conditional infit
+```{r}
+simfit3aneg <- RIgetfit(d_neg, iterations = 200, cpu = 8)
+RIitemfit(d_neg, simfit3aneg)
+```
+### Item-restscore
+```{r}
+d_test_neg %>% 
+  select(!any_of(removed_items)) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+RIrestscore(d_neg)
+```
+### PCA
+```{r}
+#| tbl-cap: "PCA of Rasch model residuals"
+RIpcmPCA(d_neg)
+```
+### Loadings 1st contrast
+```{r}
+#| label: fig-loadloc3aneg
+RIloadLoc(d_neg)
+```
+### Lokalt oberoende
+```{r}
+RIpartgamLD(d_neg)
+```
+### Residualkorrelationer
+```{r}
+#| label: tbl-rescoreskola3aneg
+simcor3aneg <- RIgetResidCor(d_neg, iterations = 500, cpu = 8)
+
+RIresidcorr(d_neg, cutoff = simcor3aneg$p99)
+```
+### Targeting
+```{r}
+#| fig-height: 5
+RItargeting(d_neg)
+```
+### Itemhierarki
+```{r}
+#| fig-height: 5
+RIitemHierarchy(d_neg)
+```
+### Conditional LRT
+```{r}
+clr_tests(d_neg, model = "PCM")
+RIbootLRT(d_neg, samplesize = 500, cpu = 8)
+```
+### Svarskategorier
+```{r}
+mirt(d_neg, model=1, itemtype='Rasch', verbose = FALSE) %>% 
+  plot(type="trace", as.table = TRUE, 
+       theta_lim = c(-5,5))
+```
+### DIF kön
+```{r}
+RIpartgamDIF(d_neg, d_dif_neg$Kön)
+RIdifTableLR(d_neg, d_dif_neg$Kön)
+```
+### DIF årskurs
+```{r}
+RIpartgamDIF(d_neg, d_dif_neg$Årskurs)
+RIdifTableLR(d_neg, d_dif_neg$Årskurs)
+```
+:::
+
+- Mokken-analysen indikerar värde 1 för f54f, f54k och f54m och värde 2 för f54e och f54o.
+- Conditional infit flaggar högtpå  på f54e och f54m och lågt på f54k
+- Item-restscore boostrap flaggar nu f54k som starkt overfit 
+- Itemrestscore flaggar f54k signifikant på 0.01 och f54e som marginellt signifikant på 0.1   
+- PCA av residualer visar 1.42 som högsta eigenvalue
+- Figuren med faktorladdningar på första residualkontrasten (loadloc) visar inga konstigheter
+- Lokala beroenden (partial gamma) visar svagt beroende mellan f54k och m
+- Residualkorrelation svag mellan f54k och m 
+- Targeting halvbra men gap i trösklar i mitten av skalan
+- Itemhierarki visar inte så bra spridning men inga oordnade svarskategorier
+- Conditional LRT visar 65% statistikt signifikanta observationer
+
+- Svarskategorier ok förutom mittenkategorierna på f54o som inte täcks
+
+- DIF för kön flaggas för f54q (partial gamma). Inget på årskurs
+
+Slutsats: Kombinationen har inte så bra targeting men kan funka som den är. Om ett ytterligare item ska bort bör det vara f54k som visar hög overfit och en svag korrelation/beroende med f54m.
+
+### DIF över årtal
+
+::: panel-tabset
+#### Data prep
+```{r}
+df_r2 %>% 
+  select(f54e, f54f, f54k, f54m, f54o, År) %>% 
+  count(År)
+
+difdata <- df_r2 %>% 
+  select(f54e, f54f, f54k, f54m, f54o, År) %>% 
+  filter(År > 2012) %>% 
+  na.omit()
+
+difdata %>% 
+  count(År)
+
+dif_år <- difdata$År
+difdata$År <- NULL
+```
+
+#### DIF tabell
+```{r}
+RIdifTable(difdata,dif_år)
+```
+#### DIF figur
+```{r}
+RIdifFigure(difdata,dif_år) +
+  scale_y_continuous(limits = c(-2,2))
+```
+:::
+
+### Reliabilitet
+
+```{r}
+#| fig-height: 4
+d_test_neg %>% 
+  select(!any_of(removed_items)) %>% 
+  RItif(samplePSI = T)
+```
+
+### Item-parametrar
+
+```{r}
+itemlabels %>% 
+  filter(itemnr %in% names(d_neg)) %>% 
+  write_csv("results/Skolaneg_itemnr.csv")
+
+d_test_neg %>% 
+  select(!any_of(removed_items)) %>% 
+  RIitemparams()
+
+d_test_neg %>% 
+  select(!any_of(removed_items)) %>% 
+  RIitemparams(output = "file", filename = "results/Skolaneg_itemparams.csv")
+```
+
+### Targeting
+
+```{r}
+#| fig-height: 4
+d_test_neg %>% 
+  select(!any_of(removed_items)) %>% 
+  RItargeting()
+```
+
+### Person fit
+
+```{r}
+d_test_neg %>% 
+  select(!any_of(removed_items)) %>% 
+  RIpfit()
+```
+
+### Summerande kommentar
+
+Halvbra index med tveksam reliabilitet och inte så bra targeting. Testar en till analys utan f54k.
+
+```{r}
+removed_items <- c("f54i", "f54q", "f54k")
+itemlabels %>% 
+  filter(itemnr %in% removed_items) %>% 
+  kbl_rise()
+```
+
+
+```{r}
+#d_backup_neg <- d_neg
+
+d_neg <- d_neg %>% 
+  select(!any_of(removed_items))
+```
+
+Utan items f54i, f54f och f54k
+
+## Analys 4 negativa items
+
+```{r}
+#| column: margin
+#| echo: false
+RIlistItemsMargin(d_neg)
+```
+
+::: panel-tabset
+### Mokken dimensionality
+```{r}
+aisp(d_neg) %>% 
+  as.data.frame() %>% 
+  set_names("h > 0.3") %>% 
+  arrange(`h > 0.3`) %>% 
+  kbl_rise(tbl_width = 20)
+```
+### Conditional infit
+```{r}
+simfit3b <- RIgetfit(d_neg, iterations = 200, cpu = 8)
+RIitemfit(d_neg, simfit3b)
+```
+### Item-restscore
+```{r}
+d_test_neg %>% 
+  select(!any_of(removed_items)) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+RIrestscore(d_neg)
+```
+### PCA
+```{r}
+#| tbl-cap: "PCA of Rasch model residuals"
+RIpcmPCA(d_neg)
+```
+### Loadings 1st contrast
+```{r}
+#| label: fig-loadloc3b
+RIloadLoc(d_neg)
+```
+### Lokalt oberoende
+```{r}
+RIpartgamLD(d_neg)
+```
+### Residualkorrelationer
+```{r}
+#| label: tbl-rescoreskola3bneg
+simcor3b <- RIgetResidCor(d_neg, iterations = 500, cpu = 8)
+
+RIresidcorr(d_neg, cutoff = simcor3b$p99)
+```
+### Targeting
+```{r}
+#| fig-height: 9
+RItargeting(d_neg)
+```
+### Itemhierarki
+```{r}
+#| fig-height: 9
+RIitemHierarchy(d_neg)
+```
+### Conditional LRT
+```{r}
+clr_tests(d_neg, model = "PCM")
+RIbootLRT(d_neg, samplesize = 500, cpu = 8)
+```
+### Svarskategorier
+```{r}
+
+mirt(d_neg, model=1, itemtype='Rasch', verbose = FALSE) %>% 
+  plot(type="trace", as.table = TRUE, 
+       theta_lim = c(-5,5))
+```
+### DIF kön
+```{r}
+RIpartgamDIF(d_neg, d_dif_neg$Kön)
+RIdifTableLR(d_neg, d_dif_neg$Kön)
+```
+### DIF årskurs
+```{r}
+RIpartgamDIF(d_neg, d_dif_neg$Årskurs)
+RIdifTableLR(d_neg, d_dif_neg$Årskurs)
+```
+:::
+
+- Mokken-analysen indikerar värde 1 för f54f och m, och värde 2 för f54e och o 
+- Conditional infit flaggar lågt på f54f 
+- Item-restscore boostrap flaggar nu f54f som svagt overfit 
+- Itemrestscore flaggar f54f som marginellt signifikant på 0.1   
+- PCA av residualer visar 1.48 som högsta eigenvalue
+- Figuren med faktorladdningar på första residualkontrasten (loadloc) visar spridda items
+- Lokala beroenden (partial gamma) visar inget
+- Residualkorrelation svaga mellan f54e och o 
+- Targeting stora gap i trösklar i mitten av skalan
+- Itemhierarki visar inte så bra spridning men inga oordnade svarskategorier
+- Conditional LRT visar 35% statistikt signifikanta observationer
+
+
+- Inget på DIF
+
+Slutsats: Helt ok inga problem med item fit, inga beroenden eller korrelationer av signifikans. Fortsätter titta på reliabilitet osv.
+
+
+### Reliabilitet
+
+```{r}
+d_test_neg %>% 
+  select(!any_of(removed_items)) %>% 
+  RItif(samplePSI = T)
+```
+
+### Item-parametrar
+
+```{r}
+itemlabels %>% 
+  filter(itemnr %in% names(d_neg)) %>% 
+  write_csv("results/Skolaneg_itemnr.csv")
+
+d_test_neg %>% 
+  select(!any_of(removed_items)) %>% 
+  RIitemparams()
+
+d_test_neg %>% 
+  select(!any_of(removed_items)) %>% 
+  RIitemparams(output = "file", filename = "results/Skolaneg_itemparams.csv")
+```
+
+### Targeting
+
+```{r}
+d_test_neg %>% 
+  select(!any_of(removed_items)) %>% 
+  RItargeting()
+```
+
+### Person fit
+
+```{r}
+d_test_neg %>% 
+  select(!any_of(removed_items)) %>% 
+  RIpfit()
+```
+
+### Summerande kommentar
+
+Ej bra reliabilitet eller targeting. Testar att lägga till F61 och f54k igen
+
+```{r}
+removed_items <- c("f54i", "f54q")
+itemlabels %>% 
+  filter(itemnr %in% removed_items) %>% 
+  kbl_rise()
+```
+
+
+
+## Analys 1 delskala
+
+```{r}
+#| column: margin
+#| echo: false
+RIlistItemsMargin(d_delskala)
+```
+
+::: panel-tabset
+### Mokken dimensionality
+```{r}
+aisp(d_delskala) %>% 
+  as.data.frame() %>% 
+  set_names("h > 0.3") %>% 
+  arrange(`h > 0.3`) %>% 
+  kbl_rise(tbl_width = 20)
+```
+### Conditional infit
+```{r}
+simfit1del <- RIgetfit(d_delskala, iterations = 200, cpu = 8)
+RIitemfit(d_delskala, simfit1del)
+```
+### Item-restscore
+```{r}
+d_test_delskala %>% 
+  #select(!any_of(removed_items)) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+RIrestscore(d_delskala)
+```
+### PCA
+```{r}
+#| tbl-cap: "PCA of Rasch model residuals"
+RIpcmPCA(d_delskala)
+```
+### Loadings 1st contrast
+```{r}
+#| label: fig-loadloc111
+RIloadLoc(d_delskala)
+```
+### Lokalt oberoende
+```{r}
+RIpartgamLD(d_delskala)
+```
+### Residualkorrelationer
+```{r}
+#| label: tbl-rescoreskola1del
+simcor1del <- RIgetResidCor(d_delskala, iterations = 250, cpu = 8)
+
+RIresidcorr(d_delskala, cutoff = simcor1del$p99)
+```
+### Targeting
+```{r}
+#| fig-height: 9
+RItargeting(d_delskala)
+```
+### Itemhierarki
+```{r}
+#| fig-height: 9
+RIitemHierarchy(d_delskala)
+```
+### Conditional LRT
+```{r}
+clr_tests(d_delskala, model = "PCM")
+RIbootLRT(d_delskala, samplesize = 500, cpu = 8)
+```
+### Svarskategorier
+```{r}
+mirt(d_delskala, model=1, itemtype='Rasch', verbose = FALSE) %>% 
+  plot(type="trace", as.table = TRUE, 
+       theta_lim = c(-5,5))
+```
+### DIF kön
+```{r}
+RIpartgamDIF(d_delskala, d_dif_delskala$Kön)
+RIdifTableLR(d_delskala, d_dif_delskala$Kön)
+```
+### DIF årskurs
+```{r}
+RIpartgamDIF(d_delskala, d_dif_delskala$Årskurs)
+RIdifTableLR(d_delskala, d_dif_delskala$Årskurs)
+```
+:::
+
+- Mokken-analysen indikerar värde 0 för F59 och värde 1 för F55 och F56
+- Conditional infit flaggar på F56 och F59
+- Item-restscore boostrap flaggar F59 som svagt underfit och F56 som starkt overfit 
+- Itemrestscore flaggar F56 och F59 som statistiskt signifikanta på 0.01
+- PCA av residualer visar 1.77 som högsta eigenvalue
+- Figuren med faktorladdningar på första residualkontrasten (loadloc) visar eventuellt att f54o sticker ut något jämfört med övriga, men även f54e
+- Lokala beroenden (partial gamma) visar beroenden mellan F56 och F55
+- Residualkorrelationer visar korrelation mellan F55 och F56
+- Targeting halvbra
+- Itemhierarki visar att alla items har oordnade svarskategorier och är huller om buller
+- Conditional LRT visar 13% statistikt signifikanta observationer
+- Svarkategorierna för alla items är kaos
+
+- DIF för årskurs flaggas för F59 (partial gamma). Inget på kön.
+
+Slutsats: Tveksamt om detta kan användas som en eget mått. F55 och F56 är för lika varandra vilket syns genom utslag på residualkorrelationer och lokalt beroende vilket inte är så konstigt då frågorna är väldigt lika varandra, en frågor om man skolkat och en frågat om man varit borta från skolan pga varit sjuk eller mått dåligt. Uppenbart att svarskategorierna är för många och att respondenterna har svårt att skilja dem åt vilket syns på mirt-grafen och itemhierarkin.
+
+Testar att lägga till dessa items i skola-negativa resultat analys 4a.
+
+
+```{r}
+
+skola.negativa.2 <- c("f54e", "f54m", "f54o", "f54q", "F55", "F56", "F59")
+
+d_neg2 <- d %>% 
+  select(any_of(skola.negativa.2))
+
+d_test_neg2 <- d_test %>% 
+  select (any_of(skola.negativa.2))
+```
+
+## Analys 1 negativa fr 4b + delskala
+
+```{r}
+#| column: margin
+#| echo: false
+RIlistItemsMargin(d_neg2)
+```
+
+::: panel-tabset
+### Mokken dimensionality
+```{r}
+aisp(d_neg2) %>% 
+  as.data.frame() %>% 
+  set_names("h > 0.3") %>% 
+  arrange(`h > 0.3`) %>% 
+  kbl_rise(tbl_width = 20)
+```
+### Conditional infit
+```{r}
+simfit1negdel <- RIgetfit(d_neg2, iterations = 200, cpu = 8)
+RIitemfit(d_neg2, simfit1negdel)
+```
+### Item-restscore
+```{r}
+d_test_neg2 %>% 
+  #select(!any_of(removed_items)) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+RIrestscore(d_neg2)
+```
+### PCA
+```{r}
+#| tbl-cap: "PCA of Rasch model residuals"
+RIpcmPCA(d_neg2)
+```
+### Loadings 1st contrast
+```{r}
+#| label: fig-loadloc1111
+RIloadLoc(d_neg2)
+```
+### Lokalt oberoende
+```{r}
+RIpartgamLD(d_delskala)
+```
+### Residualkorrelationer
+```{r}
+#| label: tbl-rescoreskola1negdel
+simcor1negdel <- RIgetResidCor(d_neg2, iterations = 250, cpu = 8)
+
+RIresidcorr(d_neg2, cutoff = simcor1negdel$p99)
+```
+### Targeting
+```{r}
+#| fig-height: 9
+RItargeting(d_neg2)
+```
+### Itemhierarki
+```{r}
+#| fig-height: 9
+RIitemHierarchy(d_neg2)
+```
+### Conditional LRT
+```{r}
+clr_tests(d_neg2, model = "PCM")
+RIbootLRT(d_neg2, samplesize = 500, cpu = 8)
+```
+### Svarskategorier
+```{r}
+mirt(d_neg2, model=1, itemtype='Rasch', verbose = FALSE) %>% 
+  plot(type="trace", as.table = TRUE, 
+       theta_lim = c(-5,5))
+```
+
+
+Mokken indikerar tre olika värden, conditional infit visar utslag på f54q, F55 och F59. item restscore visar underfit på F59 och overfit på f54q, F56 och f54o, PCA är 1.72 (för högt). många residualkorrelationer. Nu nya efter att de nya itemsen introducerades.Condtitional LRT visar 79% statistiskt signifikanta observationer.
+
+### Reliabilitet
+
+```{r}
+d_test_neg2 %>% 
+  select(!any_of(removed_items)) %>% 
+  RItif(samplePSI = T)
+```
+
+### Item-parametrar
+
+```{r}
+itemlabels %>% 
+  filter(itemnr %in% names(d_neg2)) %>% 
+  write_csv("results/Skolaneg_itemnr.csv")
+
+d_test_neg2 %>% 
+  select(!any_of(removed_items)) %>% 
+  RIitemparams()
+
+d_test_neg2 %>% 
+  select(!any_of(removed_items)) %>% 
+  RIitemparams(output = "file", filename = "results/Skolaneg_itemparams.csv")
+```
+
+### Targeting
+
+```{r}
+d_test_neg2 %>% 
+  select(!any_of(removed_items)) %>% 
+  RItargeting()
+```
+
+### Person fit
+
+```{r}
+d_test_neg2 %>% 
+  select(!any_of(removed_items)) %>% 
+  RIpfit()
+```
+
+
+## Programvara som använts
+```{r}
+#| label: packagesv
+sessionInfo()
+```
+

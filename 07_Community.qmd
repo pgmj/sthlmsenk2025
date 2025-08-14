@@ -1,0 +1,1252 @@
+---
+title: "Närsamhälle"
+title-block-banner: "#009ca6"
+title-block-banner-color: "#FFFFFF"
+author: 
+  name: Magnus Johansson
+  affiliation: RISE Research Institutes of Sweden
+  affiliation-url: https://ri.se/shic
+  orcid: 0000-0003-1669-592X
+date: last-modified
+format: html
+execute:
+  echo: true
+  warning: false
+  message: false
+  cache: true
+editor_options: 
+  markdown: 
+    wrap: 72
+  chunk_output_type: console
+---
+```{r}
+#| label: setup
+#| include: false
+
+library(mokken)
+library(arrow)
+library(ggrepel)
+library(car)
+library(grateful) 
+library(kableExtra)
+library(readxl)
+library(tidyverse)
+library(eRm)
+library(mirt)
+library(iarm)
+library(psych)
+library(ggplot2)
+library(psychotree)
+library(matrixStats)
+library(reshape)
+library(knitr)
+library(patchwork)
+library(formattable) 
+library(easyRasch) # devtools::install_github("pgmj/easyRasch")
+library(glue)
+library(foreach)
+#library(foreign)
+library(haven)
+library(labelled)
+library(gtsummary)
+
+
+### some commands exist in multiple packages, here we define preferred ones that are frequently used
+select <- dplyr::select
+count <- dplyr::count
+recode <- car::recode
+rename <- dplyr::rename
+filter <- dplyr::filter
+
+# import item information
+itemlabels <- read_excel("itemlabels/Community_itemlabels.xls")
+
+# where is the data? This is for Mac
+datafolder <- "~/Library/CloudStorage/OneDrive-SharedLibraries-RISE/SHIC - Data i Dialog - Data i Dialog/data/"
+df.all <- read_parquet(paste0(datafolder,"Stockholm Stad/2024/sthlm02-24.parquet"))
+
+# add windows path below
+#datafolder <- "C:/Users/fridasan/RISE/SHIC - Data i Dialog - 2024/"
+#df.all <- read_parquet(paste0(datafolder,"sthlm02-24.parquet"))
+
+#sthlm <- read_spss(paste0(datafolder,"Stockholm Stad/2024/Stockholmsenkäten 2002-2024 Stockholm.sav"))
+#write_parquet(sthlm, paste0(datafolder,"Stockholm Stad/2024/sthlm02-24.parquet"))
+
+# subset data for this analysis
+df <- df.all %>% 
+  select(all_of(itemlabels$itemnr),Kön,ARSKURS,ar,SkolSDO)
+
+```
+
+```{r}
+#| label: recoderawdata
+#| include: false
+
+##### Närsamhälle omkodning
+#Frågorna heter f101a till f101l i datafilen och 103 i PDF-filen.
+# samt F100 i datafilen som är 102 i PDF-filen.
+
+#hög poäng = hög risk
+# definiera svarskategorierna för att förenkla recode-koden
+# smd<-'Stämmer mycket dåligt'
+# sgd<-'Stämmer ganska dåligt'
+# sgb<-'Stämmer ganska bra'
+# smb<-'Stämmer mycket bra'
+# vetej<-'Vet inte' # kodas som missing/NA
+# mtrygg<-'Mycket trygg' # kodas 0
+# gtrygg<-'Ganska trygg'
+# gotrygg<-'Ganska otrygg'
+# motrygg<-'Mycket otrygg' # kodas 3
+# garej1<-'Går ej ut på kvällen av oro för att utsättas för brott' # kodas som 4, dock spekulativ ordinalitet
+# garej2<-'Går ej ut på kvällen av andra orsaker' # kodas som missing/NA pga ej användbart i ordinala data
+#
+#
+#val_labels(df$F100)
+
+#df$F100<-car::recode(df$F100,"1=0;2=1;3=2;4=3;5=4;6=NA;999=NA",as.factor=FALSE)
+#
+# #nsamh<-df %>% select(starts_with("f101")) %>% names()
+positiva.items <- c("f101b","f101c","f101g","f101h","f101i","f101j","f101k","f101l")
+negativa.items <- c("f101a","f101d","f101e","f101f")
+#
+
+df_recoded <- df %>% 
+  mutate(across(all_of(itemlabels$itemnr), ~ as.numeric(.x))) %>% 
+  mutate(across(all_of(negativa.items), ~ car::recode(.x,"4=3;3=2;2=1;1=0;998=NA;999=NA",as.factor=FALSE)),
+         across(all_of(positiva.items), ~ car::recode(.x,"4=0;3=1;2=2;1=3;998=NA;999=NA",as.factor=FALSE)),
+         F100 = car::recode(F100,"1=0;2=1;3=2;4=3;5=4;6=NA;999=NA",as.factor=FALSE))
+
+
+# for (i in positiva.items) {
+#    df[[i]]<-car::recode(df[[i]],"4=0;3=1;2=2;1=3;998=NA;999=NA",as.factor=FALSE)
+# }
+# 
+# for (i in negativa.items) {
+#    df[[i]]<-car::recode(df[[i]],"4=3;3=2;2=1;1=0;998=NA;999=NA",as.factor=FALSE)
+# }
+
+
+
+```
+
+
+Recode 99 and 999 to NA and make demographic variables to factors.
+
+```{r}
+df_r2 <- df_recoded %>% 
+  mutate(SkolSDO = factor(SkolSDO, levels = val_labels(df_recoded$SkolSDO),
+                          labels = names(val_labels(df_recoded$SkolSDO)))) %>% 
+  mutate(Årskurs = factor(ARSKURS, levels = val_labels(df_recoded$ARSKURS),
+                          labels = names(val_labels(df_recoded$ARSKURS)))) %>% 
+  select(!ARSKURS) %>% 
+  mutate(SkolSDO = car::recode(SkolSDO,"99=NA;'Övrigt ospecificerat'=NA"),
+         Årskurs = car::recode(Årskurs,"999=NA")) %>% 
+  mutate(Kön = factor(Kön, levels = 1:2, labels = c("Pojke","Flicka")),
+         År = as.numeric(ar)) %>% 
+  select(!ar)
+```
+
+```{r}
+df_r2 %>% 
+  select(all_of(itemlabels$itemnr)) %>% 
+  pivot_longer(everything()) %>% 
+  count(value)
+```
+
+```{r}
+library(rsample)
+set.seed(14578)
+# create dataframe with 2024 data with all variables (post recode) and only complete responses
+df24 <- df_r2 %>% 
+  filter(År == 2024) %>% 
+  na.omit() %>% 
+  select(!År)
+
+# Put 1/5 of the data into the training set 
+data_split <- initial_split(df24, prop = 1/10, strata = SkolSDO)
+
+# Create data frames for the two sets:
+d <- training(data_split)
+d_test  <- testing(data_split)
+
+# create DIF df
+d_dif <- d %>% 
+  select(Kön,Årskurs,SkolSDO)
+
+d_testdif <- d_test %>% 
+  select(Kön,Årskurs,SkolSDO)
+
+# remove non-items
+d <- d %>% 
+  select(!c(Kön,Årskurs,SkolSDO))
+d_test <- d_test %>% 
+  select(!c(Kön,Årskurs,SkolSDO))
+```
+
+## Frågor om närsamhälle
+
+Frågorna heter F100 och f101a till f101l i datafilen, och överensstämmer med 102 och 103 i PDF-filen.
+
+F100 ställer frågan **"Om du går ut ensam sent en kväll i området där du bor, känner du dig då..."** med svarsalternativen:
+
+- Mycket trygg
+- Ganska trygg
+- Ganska otrygg
+- Mycket otrygg
+- Går ej ut på kvällen av oro för att utsättas för brott <--- **kodas som missing/NA pga ej användbart i ordinala data. Skulle ev. kunna ses som likvärdigt som Mycket Otrygg, eller som ännu "värre", ordinalt ett steg över, men det är diskutabelt.**
+- Går ej ut på kvällen av andra orsaker <--- **kodas som missing/NA pga ej användbart i ordinala data. Det är alltför oklart vad "andra orsaker" är.**
+
+Ovanstående frågor kodas om till siffror 0-3, där hög siffra är Mycket otrygg.
+
+f101-frågorna föregås av frågan **"Hur väl stämmer följande påståenden in på ditt bostadsområde?"**. Samtliga frågor har samma fyra svarskategorier:
+
+- 'Stämmer mycket dåligt'
+- 'Stämmer ganska dåligt'
+- 'Stämmer ganska bra'
+- 'Stämmer mycket bra'
+
+Frågorna är blandat negativt och positivt formulerade, och vid omkodning från ovanstående svarskategorier till siffror 0-3 har positiva frågor vänts så att höga värden alltid innebär högre risk.
+
+Nedan återges samtliga item, med grön markering på positiva item.
+
+```{r}
+#| label: showitems
+#| tbl-cap-location: top
+RIcolorlistitems(c(3,4,8:13), "green")
+```
+
+Två index har bildats utifrån f101-frågorna, och vi kommer att titta på dessa separat.
+
+**Grad av ordningsproblem i bostadsområdet**
+
+- 101a Vandalism är vanligt i bostadsområdet
+- 101d Det finns personer som säljer narkotika i bostadsområdet
+- 101e På vardagskvällarna finns det många berusade utomhus
+- 101g Det är ovanligt med våldsbrott i det här bostadsområdet
+
+**Grad av informell social kontroll i bostadsområdet**
+
+- F101 b Om en vuxen såg mig göra något olagligt i mitt bostadsområde skulle nog mina föräldrar få reda på det
+- F101 c Vuxna skulle ingripa om någon helt öppet försökte sälja narkotika till ungdomar
+- F101 h Vuxna skulle ingripa om det blev ett slagsmål framför mitt hus
+- F101 i Om jag blev rånad på en allmän plats skulle vuxna ingripa
+
+```{r}
+items.ordning <- c("f101a","f101d","f101e","f101g")
+items.kontroll <- c("f101b","f101c","f101h","f101i")
+```
+
+## Deskriptiva data
+
+### Demografi
+Vi har delat data i två olika stora sampel.
+
+```{r}
+#| label: descriptives1
+#| layout-ncol: 2
+tbl_summary(d_dif)
+tbl_summary(d_testdif)
+```
+
+### Item-data
+
+::: panel-tabset
+#### Tile plot
+```{r}
+RItileplot(d)
+```
+#### Stacked bars
+```{r}
+RIbarstack(d)
+```
+:::
+
+
+## Ordningsproblem - Analys 1 
+
+```{r}
+#| column: margin
+#| echo: false
+
+d %>% 
+  select(all_of(items.ordning)) %>% 
+  RIlistItemsMargin()
+```
+
+::: panel-tabset
+### Mokken dimensionality
+```{r}
+d %>% 
+  select(all_of(items.ordning)) %>% 
+aisp() %>% 
+  as.data.frame() %>% 
+  set_names("h > 0.3") %>% 
+  arrange(`h > 0.3`) %>% 
+  kbl_rise(tbl_width = 20)
+```
+
+### Item-restscore
+```{r}
+d_test %>% 
+    select(all_of(items.ordning)) %>% 
+
+  #select(!any_of(removed_items)) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+```
+### PCA
+```{r}
+#| tbl-cap: "PCA of Rasch model residuals"
+d %>% 
+  select(all_of(items.ordning)) %>% 
+  RIpcmPCA()
+```
+### Loadings 1st contrast
+```{r}
+
+d %>% 
+  select(all_of(items.ordning)) %>% 
+  RIloadLoc()
+```
+:::
+
+Item g avviker tydligt. Det är ett reverserat item
+
+- Det är ovanligt med våldsbrott (misshandel, rån, våldtäkt) i det här bostadsområdet.
+
+## Ordningsproblem - Analys 2 
+
+```{r}
+#| column: margin
+#| echo: false
+
+d %>% 
+  select(all_of(items.ordning)) %>% 
+  select(!f101g) %>% 
+  RIlistItemsMargin()
+```
+
+::: panel-tabset
+### Mokken dimensionality
+```{r}
+d %>% 
+  select(all_of(items.ordning)) %>% 
+    select(!f101g) %>% 
+
+aisp() %>% 
+  as.data.frame() %>% 
+  set_names("h > 0.3") %>% 
+  arrange(`h > 0.3`) %>% 
+  kbl_rise(tbl_width = 20)
+```
+### Item-restscore
+```{r}
+d_test %>% 
+    select(all_of(items.ordning)) %>% 
+    select(!f101g) %>% 
+  #select(!any_of(removed_items)) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+```
+### PCA
+```{r}
+#| tbl-cap: "PCA of Rasch model residuals"
+d %>% 
+  select(all_of(items.ordning)) %>% 
+  select(!f101g) %>% 
+  RIpcmPCA()
+```
+### LRT
+```{r}
+d %>% 
+  select(all_of(items.ordning)) %>% 
+  select(!f101g) %>% 
+  RIbootLRT()
+```
+### Lokalt oberoende
+```{r}
+d_test %>% 
+  select(all_of(items.ordning)) %>% 
+  select(!f101g) %>% 
+  RIpartgamLD()
+```
+### Targeting
+```{r}
+#| fig-height: 9
+d_test %>% 
+  select(all_of(items.ordning)) %>% 
+  select(!f101g) %>% 
+RItargeting()
+```
+### Itemhierarki
+```{r}
+#| fig-height: 9
+d_test %>% 
+  select(all_of(items.ordning)) %>% 
+  select(!f101g) %>% 
+  RIitemHierarchy()
+```
+### Svarskategorier
+```{r}
+d_test %>% 
+  select(all_of(items.ordning)) %>% 
+  select(!f101g) %>% 
+  mirt(model=1, itemtype='Rasch', verbose = FALSE) %>% 
+  plot(type="trace", as.table = TRUE, 
+       theta_lim = c(-4,6))
+```
+### DIF kön
+```{r}
+d_test %>% 
+  select(all_of(items.ordning)) %>% 
+  select(!f101g) %>% 
+  RIpartgamDIF(d_testdif$Kön)
+
+d_test %>% 
+  select(all_of(items.ordning)) %>% 
+  select(!f101g) %>% 
+  RIdifTableLR(d_testdif$Kön)
+
+d_test %>% 
+  select(all_of(items.ordning)) %>% 
+  select(!f101g) %>% 
+  RIdifThreshFigLR(d_testdif$Kön)
+
+```
+### DIF årskurs
+```{r}
+d_test %>% 
+  select(all_of(items.ordning)) %>% 
+  select(!f101g) %>% 
+  RIpartgamDIF(d_testdif$Årskurs)
+
+d_test %>% 
+  select(all_of(items.ordning)) %>% 
+  select(!f101g) %>% 
+  RIdifTableLR(d_testdif$Årskurs)
+
+d_test %>% 
+  select(all_of(items.ordning)) %>% 
+  select(!f101g) %>% 
+  RIdifThreshFigLR(d_testdif$Årskurs)
+
+```
+### Score groups
+```{r}
+d_test %>% 
+  select(all_of(items.ordning)) %>% 
+  select(!f101g) %>% 
+  PCM() %>% 
+  item_obsexp()
+```
+### Reliabilitet
+```{r}
+d_test %>% 
+  select(all_of(items.ordning)) %>% 
+  select(!f101g) %>% 
+  RItif(samplePSI = T)
+```
+:::
+
+"f101a" "f101d" "f101e" ser bra ut på alla itemfokuserade test, men sämre på LRT. Oklart varför. Reliabiliteten blir låg.
+
+```{r}
+d_test %>% 
+  select(all_of(items.ordning)) %>% 
+  select(!f101g) %>% 
+  RIlistitems()
+```
+
+
+### DIF över årtal
+
+::: panel-tabset
+#### Data prep
+```{r}
+df_r2 %>% 
+  select(all_of(items.ordning),År) %>% 
+  select(!f101g) %>% 
+  count(År)
+
+difdata <- df_r2 %>% 
+  select(all_of(items.ordning),År) %>% 
+  select(!f101g) %>% 
+  filter(År > 2012) %>% 
+  na.omit()
+
+difdata %>% 
+  count(År)
+
+dif_år <- difdata$År
+difdata$År <- NULL
+```
+
+#### DIF tabell
+```{r}
+RIdifTable(difdata,dif_år)
+```
+#### DIF figur
+```{r}
+RIdifFigure(difdata,dif_år) +
+  scale_y_continuous(limits = c(-2,2))
+```
+:::
+
+
+## Social kontroll - Analys 1 
+
+```{r}
+#| column: margin
+#| echo: false
+d %>% 
+  select(all_of(items.kontroll)) %>% 
+  RIlistItemsMargin()
+```
+
+::: panel-tabset
+### Mokken dimensionality
+```{r}
+d %>% 
+  select(all_of(items.kontroll)) %>% 
+  aisp() %>% 
+  as.data.frame() %>% 
+  set_names("h > 0.3") %>% 
+  arrange(`h > 0.3`) %>% 
+  kbl_rise(tbl_width = 20)
+```
+
+### Item-restscore
+```{r}
+d_test %>% 
+  select(all_of(items.kontroll)) %>% 
+  #select(!any_of(removed_items)) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+```
+### PCA
+```{r}
+#| tbl-cap: "PCA of Rasch model residuals"
+d %>% 
+  select(all_of(items.kontroll)) %>% 
+  RIpcmPCA()
+```
+### Loadings 1st contrast
+```{r}
+d %>% 
+  select(all_of(items.kontroll)) %>% 
+  RIloadLoc()
+```
+### Lokalt oberoende
+```{r}
+d_test %>% 
+  select(all_of(items.kontroll)) %>% 
+  RIpartgamLD()
+```
+### Targeting
+```{r}
+#| fig-height: 9
+d_test %>% 
+  select(all_of(items.kontroll)) %>% 
+  RItargeting()
+```
+### Itemhierarki
+```{r}
+#| fig-height: 9
+
+d_test %>% 
+  select(all_of(items.kontroll)) %>% 
+  RIitemHierarchy()
+```
+### Svarskategorier
+```{r}
+d_test %>% 
+  select(all_of(items.kontroll)) %>% 
+  mirt(model=1, itemtype='Rasch', verbose = FALSE) %>% 
+  plot(type="trace", as.table = TRUE, 
+       theta_lim = c(-5,5))
+```
+### DIF kön
+```{r}
+d_test %>% 
+  select(all_of(items.ordning)) %>% 
+  select(!f101g) %>% 
+  RIpartgamDIF(d_testdif$Kön)
+
+d_test %>% 
+  select(all_of(items.ordning)) %>% 
+  select(!f101g) %>% 
+  RIdifTableLR(d_testdif$Kön)
+
+```
+### DIF årskurs
+```{r}
+d_test %>% 
+  select(all_of(items.ordning)) %>% 
+  select(!f101g) %>% 
+  RIpartgamDIF(d_testdif$Årskurs)
+
+d_test %>% 
+  select(all_of(items.ordning)) %>% 
+  select(!f101g) %>% 
+  RIdifTableLR(d_testdif$Årskurs)
+```
+### Score groups
+```{r}
+d_test %>% 
+  select(all_of(items.ordning)) %>% 
+  select(!f101g) %>% 
+  PCM() %>% 
+  item_obsexp()
+```
+:::
+
+Svarskategorier fungerar ok. Ingen DIF.
+
+b är underfit, samtidigt som h och i har problem med lokalt beroende. 
+
+- f101b  Om en vuxen såg mig göra något olagligt i mitt bostadsområde skulle nog mina föräldrar få reda på det.
+- f101h  Vuxna skulle ingripa om det blev ett slagsmål framför mitt hus.                                       
+- f101i  Om jag blev rånad på en allmän plats i bostadsområdet skulle vuxna ingripa.
+
+Verkar logiskt att vuxnas ingripande är relaterat.
+
+Vi testar två varianter, en där vi tar bort b, och en där vi tar bort h (något mer overfit enligt item-restscore).
+
+```{r}
+d_test %>% 
+  select(all_of(items.kontroll)) %>% 
+  select(!f101b) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+
+d_test %>% 
+  select(all_of(items.kontroll)) %>% 
+  select(!f101b) %>% 
+  RIbootLRT()
+
+d_test %>% 
+  select(all_of(items.kontroll)) %>% 
+  select(!f101b) %>% 
+  RIpartgamLD()
+```
+
+Residualkorrelationen kvarstår.
+
+```{r}
+d_test %>% 
+  select(all_of(items.kontroll)) %>% 
+  select(!f101h) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+
+d_test %>% 
+  select(all_of(items.kontroll)) %>% 
+  select(!f101h) %>% 
+  RIbootLRT()
+
+d_test %>% 
+  select(all_of(items.kontroll)) %>% 
+  select(!f101h) %>% 
+  RIpartgamLD()
+```
+
+Items C och I korrelerar, och C ligger högt på item-restscore overfit.
+
+- f101c  Vuxna skulle ingripa om någon helt öppet försökte sälja narkotika till ungdomar.
+
+Vi provar ta bort I i stället.
+
+```{r}
+d_test %>% 
+  select(all_of(items.kontroll)) %>% 
+  select(!f101i) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+
+d_test %>% 
+  select(all_of(items.kontroll)) %>% 
+  select(!f101i) %>% 
+  RIbootLRT(cpu = 8)
+
+d_test %>% 
+  select(all_of(items.kontroll)) %>% 
+  select(!f101i) %>% 
+  RIpartgamLD()
+```
+
+C fortfarance något hög overfit, och korrelation mellan C och H.
+
+Hur vi än vänder och vrider på denna situation blir det bara två items kvar. Frågorna om vuxnas ingripande ger inte meningsfull information, det räcker med en av dem.
+
+
+## Alla items - analys 1
+
+
+```{r}
+#| column: margin
+#| echo: false
+d %>% 
+  #select(all_of(items.kontroll)) %>% 
+  RIlistItemsMargin()
+```
+
+::: panel-tabset
+### Mokken dimensionality
+```{r}
+d_test %>% 
+  select(!F100) %>% 
+  aisp() %>% 
+  as.data.frame() %>% 
+  set_names("h > 0.3") %>% 
+  arrange(`h > 0.3`) %>% 
+  kbl_rise(tbl_width = 20)
+```
+
+Mokken cannot handle F100 with different number of response categories
+
+### Item-restscore
+```{r}
+d_test %>% 
+  #select(all_of(items.kontroll)) %>% 
+  #select(!any_of(removed_items)) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+```
+### PCA
+```{r}
+#| tbl-cap: "PCA of Rasch model residuals"
+d_test %>% 
+  #select(all_of(items.kontroll)) %>% 
+  RIpcmPCA()
+```
+### Loadings 1st contrast
+```{r}
+d_test %>% 
+  #select(all_of(items.kontroll)) %>% 
+  RIloadLoc()
+```
+### Lokalt oberoende
+```{r}
+d_test %>% 
+  #select(all_of(items.kontroll)) %>% 
+  RIpartgamLD()
+```
+### Targeting
+```{r}
+#| fig-height: 9
+d_test %>% 
+  #select(all_of(items.kontroll)) %>% 
+  RItargeting()
+```
+### Itemhierarki
+```{r}
+#| fig-height: 9
+d_test %>% 
+  #select(all_of(items.kontroll)) %>% 
+  RIitemHierarchy()
+```
+### Svarskategorier
+```{r}
+d_test %>% 
+  #select(all_of(items.kontroll)) %>% 
+  mirt(model=1, itemtype='Rasch', verbose = FALSE) %>% 
+  plot(type="trace", as.table = TRUE, 
+       theta_lim = c(-5,5))
+```
+:::
+
+
+
+Mokken indikerar två kluster, det mindre med 4 item: a, d, e, f. Vi såg tidigare att A, D och E fungerar ok tillsammans. Loadings 1st contrast visar även att F100 (trygg ute på kvällen) drar åt samma håll, och item-restscore stödjer detta (underfit på samma vis som andra i klustret).
+
+- f101a  Vandalism (klotter, olaglig graffiti, förstörelse) är vanligt i bostadsområdet.                       
+- f101d  Det finns personer som säljer narkotika i bostadsområdet.                                             
+- f101e  På vardagskvällar finns det många berusade utomhus i bostadsområdet.                                  
+- f101f  Så fort jag kan vill jag flytta till ett annat bostadsområde.    
+- F100   Om du går ut ensam sent en kväll i området där du bor, känner du dig då...
+
+Vi gör ett snabbt test av att lägga till f och F100 tillsammans med a d e.
+
+```{r}
+d_test %>% 
+  select(f101a,f101f,f101d,f101e,F100) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+```
+
+Nej, det går inte bra. Vi kollar även på svarskategorierna utifrån denna uppsättning.
+
+```{r}
+d_test %>% 
+  select(f101a,f101f,f101d,f101e,F100) %>% 
+  mirt(model=1, itemtype='Rasch', verbose = FALSE) %>% 
+  plot(type="trace", as.table = TRUE, 
+       theta_lim = c(-5,5))
+
+d_test %>% 
+  select(f101a,f101f,f101d,f101e,F100) %>%
+  RIdifThreshFigLR(d_testdif$Kön)
+```
+
+D har oordnade trösklar, vilket den inte hade när bara a, d och e var med i analysen.
+
+F100 har oordnade trösklar, där det ser ut som att ganska/mycket otrygg bör slås samman, och att "Går ej ut på kvällen av oro för att utsättas för brott" fungerar som högsta kategori.
+
+Finns det könsskillnader för itemtrösklarna?
+
+
+## Alla items 2
+
+Vi tar bort adef och F100. Vi tar också bort item g, som redan tidigare visat problem med 3 andra items i denna uppsättning.
+
+```{r}
+#| column: margin
+#| echo: false
+d %>% 
+  select(!c(f101a,f101f,f101d,f101e,F100,f101g)) %>% 
+  RIlistItemsMargin()
+```
+
+::: panel-tabset
+### Item-restscore
+```{r}
+d_test %>% 
+  select(!c(f101a,f101f,f101d,f101e,F100,f101g)) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+```
+### PCA
+```{r}
+#| tbl-cap: "PCA of Rasch model residuals"
+d_test %>% 
+  select(!c(f101a,f101f,f101d,f101e,F100,f101g)) %>% 
+  RIpcmPCA()
+```
+### LRT
+```{r}
+d_test %>% 
+  select(!c(f101a,f101f,f101d,f101e,F100,f101g)) %>% 
+  RIbootLRT(cpu = 8)
+```
+
+### Loadings 1st contrast
+```{r}
+d_test %>% 
+  select(!c(f101a,f101f,f101d,f101e,F100,f101g)) %>% 
+  RIloadLoc()
+```
+### Lokalt oberoende
+```{r}
+d_test %>% 
+  select(!c(f101a,f101f,f101d,f101e,F100,f101g)) %>% 
+  RIpartgamLD()
+```
+### Targeting
+```{r}
+#| fig-height: 9
+d_test %>% 
+  select(!c(f101a,f101f,f101d,f101e,F100,f101g)) %>% 
+  RItargeting()
+```
+### Itemhierarki
+```{r}
+#| fig-height: 9
+d_test %>% 
+  select(!c(f101a,f101f,f101d,f101e,F100,f101g)) %>% 
+  RIitemHierarchy()
+```
+### Svarskategorier
+```{r}
+d_test %>% 
+  #select(all_of(items.kontroll)) %>% 
+  mirt(model=1, itemtype='Rasch', verbose = FALSE) %>% 
+  plot(type="trace", as.table = TRUE, 
+       theta_lim = c(-5,5))
+```
+:::
+
+b underfit.
+
+Lokalt beroende mellan:
+
+- k och l (trivs bra/skulle sakna området om jag flyttar)
+- i och h (vuxna skulle ingripa)
+
+jkl har små avstånd mellan två högsta kategorierna (lägsta iom reversering av positiva items), mycket/ganska dåligt.
+
+- 'Stämmer mycket dåligt'
+- 'Stämmer ganska dåligt'
+- 'Stämmer ganska bra'
+- 'Stämmer mycket bra'
+
+Item L och I ligger närmare respondenterna i targeting. Vi tar bort K och H, men först provar vi ta bort b och ser hur det påverkar.
+
+::: panel-tabset
+### Item-restscore
+```{r}
+d_test %>% 
+  select(!c(f101a,f101f,f101d,f101e,F100,f101g,f101b)) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+```
+### Lokalt oberoende
+```{r}
+d_test %>% 
+  select(!c(f101a,f101f,f101d,f101e,F100,f101g,f101b)) %>% 
+  RIpartgamLD()
+```
+:::
+
+
+## Alla items 3
+
+Utan K och H.
+
+```{r}
+#| column: margin
+#| echo: false
+d %>% 
+  select(!c(f101a,f101f,f101d,f101e,F100,f101g,f101h,f101k)) %>% 
+  RIlistItemsMargin()
+```
+
+::: panel-tabset
+### Item-restscore
+```{r}
+d_test %>% 
+  select(!c(f101a,f101f,f101d,f101e,F100,f101g,f101h,f101k)) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+```
+### PCA
+```{r}
+#| tbl-cap: "PCA of Rasch model residuals"
+d_test %>% 
+  select(!c(f101a,f101f,f101d,f101e,F100,f101g,f101h,f101k)) %>% 
+  RIpcmPCA()
+```
+### LRT
+```{r}
+d_test %>% 
+  select(!c(f101a,f101f,f101d,f101e,F100,f101g,f101h,f101k)) %>% 
+  RIbootLRT(cpu = 8)
+```
+
+### Loadings 1st contrast
+```{r}
+d_test %>% 
+  select(!c(f101a,f101f,f101d,f101e,F100,f101g,f101h,f101k)) %>% 
+  RIloadLoc()
+```
+### Lokalt oberoende
+```{r}
+d_test %>% 
+  select(!c(f101a,f101f,f101d,f101e,F100,f101g,f101h,f101k)) %>% 
+  RIpartgamLD()
+```
+### Residualkorrelation
+```{r}
+rescor <- d_test %>% 
+  select(!c(f101a,f101f,f101d,f101e,F100,f101g,f101h,f101k)) %>% 
+  RIgetResidCor(iterations = 250, cpu = 8)
+
+d_test %>% 
+  select(!c(f101a,f101f,f101d,f101e,F100,f101g,f101h,f101k)) %>% 
+  RIresidcorr(rescor$p99)
+```
+
+### Targeting
+```{r}
+#| fig-height: 9
+d_test %>% 
+  select(!c(f101a,f101f,f101d,f101e,F100,f101g,f101h,f101k)) %>% 
+  RItargeting()
+```
+### Itemhierarki
+```{r}
+#| fig-height: 9
+d_test %>% 
+  select(!c(f101a,f101f,f101d,f101e,F100,f101g,f101h,f101k)) %>% 
+  RIitemHierarchy()
+```
+### Svarskategorier
+```{r}
+d_test %>% 
+  select(!c(f101a,f101f,f101d,f101e,F100,f101g,f101h,f101k)) %>% 
+  mirt(model=1, itemtype='Rasch', verbose = FALSE) %>% 
+  plot(type="trace", as.table = TRUE, 
+       theta_lim = c(-5,5))
+```
+:::
+
+Item I är mest overfit och har en residualkorrelation med C. I har även samma problem med svarskategorier som J och L har. Det gäller alltså alla positiva items.
+
+Vi tar bort I och slår samman svarskategorier inför nästa analys.
+
+## Alla items - Analys 4
+
+```{r}
+d_test %>% 
+  select(!c(f101a,f101f,f101d,f101e,F100,f101g,f101h,f101k,f101i)) %>% 
+  mutate(across(c(f101j,f101l), ~ car::recode(.x,"3=2"))) %>% 
+  RItileplot()
+
+d_test %>% 
+  select(!c(f101a,f101f,f101d,f101e,F100,f101g,f101h,f101k,f101i)) %>% 
+  mutate(across(c(f101j,f101l), ~ car::recode(.x,"3=2"))) %>% 
+    mirt(model=1, itemtype='Rasch', verbose = FALSE) %>% 
+  plot(type="trace", as.table = TRUE, 
+       theta_lim = c(-5,5))
+```
+
+
+```{r}
+#| column: margin
+#| echo: false
+d %>% 
+  select(!c(f101a,f101f,f101d,f101e,F100,f101g,f101h,f101k,f101i)) %>% 
+  mutate(across(c(f101j,f101l), ~ car::recode(.x,"3=2"))) %>% 
+  RIlistItemsMargin()
+```
+
+::: panel-tabset
+### Item-restscore
+```{r}
+d_test %>% 
+  select(!c(f101a,f101f,f101d,f101e,F100,f101g,f101h,f101k,f101i)) %>% 
+  mutate(across(c(f101j,f101l), ~ car::recode(.x,"3=2"))) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+```
+### PCA
+```{r}
+#| tbl-cap: "PCA of Rasch model residuals"
+d_test %>% 
+  select(!c(f101a,f101f,f101d,f101e,F100,f101g,f101h,f101k,f101i)) %>% 
+  mutate(across(c(f101j,f101l), ~ car::recode(.x,"3=2"))) %>% 
+  RIpcmPCA()
+```
+### LRT
+```{r}
+d_test %>% 
+  select(!c(f101a,f101f,f101d,f101e,F100,f101g,f101h,f101k,f101i)) %>% 
+  mutate(across(c(f101j,f101l), ~ car::recode(.x,"3=2"))) %>% 
+  RIbootLRT(cpu = 8)
+```
+
+### Loadings 1st contrast
+```{r}
+
+d_test %>% 
+  select(!c(f101a,f101f,f101d,f101e,F100,f101g,f101h,f101k,f101i)) %>% 
+  mutate(across(c(f101j,f101l), ~ car::recode(.x,"3=2"))) %>% 
+  RIloadLoc()
+```
+### Lokalt oberoende
+```{r}
+d_test %>% 
+  select(!c(f101a,f101f,f101d,f101e,F100,f101g,f101h,f101k,f101i)) %>% 
+  mutate(across(c(f101j,f101l), ~ car::recode(.x,"3=2"))) %>% 
+  RIpartgamLD()
+```
+### Residualkorrelation
+```{r}
+rescor <- d_test %>% 
+  select(!c(f101a,f101f,f101d,f101e,F100,f101g,f101h,f101k,f101i)) %>% 
+  mutate(across(c(f101j,f101l), ~ car::recode(.x,"3=2"))) %>% 
+  RIgetResidCor(iterations = 250, cpu = 8)
+
+d_test %>% 
+  select(!c(f101a,f101f,f101d,f101e,F100,f101g,f101h,f101k,f101i)) %>% 
+  mutate(across(c(f101j,f101l), ~ car::recode(.x,"3=2"))) %>% 
+  RIresidcorr(rescor$p99)
+```
+:::
+
+
+J och L har en residualkorrelation. B och C visar liknande tendenser men tvetydigt då partial gamma är högre medan residualkorrelationen är lägre än J och L. Kan vara så att den försvinner när ett item i ena paret tas bort.
+
+```{r}
+d_test %>% 
+  select(!c(f101a,f101f,f101d,f101e,F100,f101g,f101h,f101k,f101i,f101c)) %>% 
+  mutate(across(c(f101j,f101l), ~ car::recode(.x,"3=2"))) %>% 
+  RIpartgamLD()
+
+d_test %>% 
+  select(!c(f101a,f101f,f101d,f101e,F100,f101g,f101h,f101k,f101i,f101c)) %>% 
+  mutate(across(c(f101j,f101l), ~ car::recode(.x,"3=2"))) %>% 
+  RIbootLRT(cpu = 8)
+```
+
+Utan c svag rescor mellan j och l.
+
+```{r}
+d_test %>% 
+  select(!c(f101a,f101f,f101d,f101e,F100,f101g,f101h,f101k,f101i,f101j)) %>% 
+  mutate(across(c(f101l), ~ car::recode(.x,"3=2"))) %>% 
+  RIpartgamLD()
+
+d_test %>% 
+  select(!c(f101a,f101f,f101d,f101e,F100,f101g,f101h,f101k,f101i,f101j)) %>% 
+  mutate(across(c(f101l), ~ car::recode(.x,"3=2"))) %>% 
+  RIbootLRT(cpu = 8)
+```
+
+tar vi bort j blir det sämre.
+
+```{r}
+d_test %>% 
+  select(!c(f101a,f101f,f101d,f101e,F100,f101g,f101h,f101k,f101i,f101l)) %>% 
+  mutate(across(c(f101j), ~ car::recode(.x,"3=2"))) %>% 
+  RIpartgamLD()
+
+d_test %>% 
+  select(!c(f101a,f101f,f101d,f101e,F100,f101g,f101h,f101k,f101i,f101l)) %>% 
+  mutate(across(c(f101j), ~ car::recode(.x,"3=2"))) %>% 
+  RIbootLRT(cpu = 8)
+```
+
+Minst dåligt att ta bort C.
+
+## Analys 5
+
+::: panel-tabset
+### Item-restscore
+```{r}
+d_test %>% 
+  select(!c(f101a,f101f,f101d,f101e,F100,f101g,f101h,f101k,f101i,f101c)) %>% 
+  mutate(across(c(f101j,f101l), ~ car::recode(.x,"3=2"))) %>% 
+  RIbootRestscore(cpu = 8)
+```
+
+### TIF
+```{r}
+d_test %>% 
+  select(!c(f101a,f101f,f101d,f101e,F100,f101g,f101h,f101k,f101i,f101c)) %>% 
+  mutate(across(c(f101j,f101l), ~ car::recode(.x,"3=2"))) %>% 
+  RItif(samplePSI = T)
+```
+
+### Targeting
+
+```{r}
+d_test %>% 
+  select(!c(f101a,f101f,f101d,f101e,F100,f101g,f101h,f101k,f101i,f101c)) %>% 
+  mutate(across(c(f101j,f101l), ~ car::recode(.x,"3=2"))) %>% 
+  RItargeting()
+```
+
+### Person fit
+```{r}
+d_test %>% 
+  select(!c(f101a,f101f,f101d,f101e,F100,f101g,f101h,f101k,f101i,f101c)) %>% 
+  mutate(across(c(f101j,f101l), ~ car::recode(.x,"3=2"))) %>% 
+  RIpfit()
+```
+### Itemhierarki
+```{r}
+#| fig-height: 9
+d_test %>% 
+  select(!c(f101a,f101f,f101d,f101e,F100,f101g,f101h,f101k,f101i)) %>% 
+  mutate(across(c(f101j,f101l), ~ car::recode(.x,"3=2"))) %>% 
+  RIitemHierarchy()
+```
+### DIF kön
+```{r}
+d_test %>% 
+  select(!c(f101a,f101f,f101d,f101e,F100,f101g,f101h,f101k,f101i)) %>% 
+  mutate(across(c(f101j,f101l), ~ car::recode(.x,"3=2"))) %>% 
+  RIpartgamDIF(d_testdif$Kön)
+
+d_test %>% 
+  select(!c(f101a,f101f,f101d,f101e,F100,f101g,f101h,f101k,f101i)) %>% 
+  mutate(across(c(f101j,f101l), ~ car::recode(.x,"3=2"))) %>% 
+  RIdifTableLR(d_testdif$Kön)
+
+d_test %>% 
+  select(!c(f101a,f101f,f101d,f101e,F100,f101g,f101h,f101k,f101i)) %>% 
+  mutate(across(c(f101j,f101l), ~ car::recode(.x,"3=2"))) %>% 
+  RIdifThreshFigLR(d_testdif$Kön)
+
+```
+### DIF årskurs
+```{r}
+d_test %>% 
+  select(!c(f101a,f101f,f101d,f101e,F100,f101g,f101h,f101k,f101i)) %>% 
+  mutate(across(c(f101j,f101l), ~ car::recode(.x,"3=2"))) %>% 
+  RIpartgamDIF(d_testdif$Årskurs)
+
+d_test %>% 
+  select(!c(f101a,f101f,f101d,f101e,F100,f101g,f101h,f101k,f101i)) %>% 
+  mutate(across(c(f101j,f101l), ~ car::recode(.x,"3=2"))) %>% 
+  RIdifTableLR(d_testdif$Årskurs)
+
+d_test %>% 
+  select(!c(f101a,f101f,f101d,f101e,F100,f101g,f101h,f101k,f101i)) %>% 
+  mutate(across(c(f101j,f101l), ~ car::recode(.x,"3=2"))) %>% 
+  RIdifThreshFigLR(d_testdif$Årskurs)
+```
+### Score groups
+```{r}
+d_test %>% 
+  select(!c(f101a,f101f,f101d,f101e,F100,f101g,f101h,f101k,f101i)) %>% 
+  mutate(across(c(f101j,f101l), ~ car::recode(.x,"3=2"))) %>%
+  PCM() %>% 
+  item_obsexp()
+```
+:::
+
+"f101b" "f101c" "f101j" "f101l"
+
+Ingen DIF, svarskategorierna fungerar ok efter justering av j och l. Reliabiliteten är låg.
+
+f101b  Om en vuxen såg mig göra något olagligt i mitt bostadsområde skulle nog mina föräldrar få reda på det.
+f101c  Vuxna skulle ingripa om någon helt öppet försökte sälja narkotika till ungdomar. 
+f101j  Mina grannar brukar heja/hälsa på mig när vi möts.   
+f101l  Om jag var tvungen att flytta skulle jag sakna bostadsområdet jag bor i.    
+
+### DIF över årtal
+
+::: panel-tabset
+#### Data prep
+```{r}
+df_r2 %>% 
+  select(f101b,f101c,f101j,f101l,År) %>% 
+  count(År)
+
+difdata <- df_r2 %>% 
+  select(f101b,f101c,f101j,f101l,År) %>% 
+  mutate(across(c(f101j,f101l), ~ car::recode(.x,"3=2"))) %>%
+  filter(År > 2012) %>% 
+  na.omit()
+
+difdata %>% 
+  count(År)
+
+dif_år <- difdata$År
+difdata$År <- NULL
+```
+
+#### DIF tabell
+```{r}
+RIdifTable(difdata,dif_år)
+```
+#### DIF figur
+```{r}
+RIdifFigure(difdata,dif_år) +
+  scale_y_continuous(limits = c(-2,2))
+```
+:::
+
+Ser stabilt ut.
+
+## Programvara som använts
+
+```{r}
+#| label: packagesv
+# pkgs <- cite_packages(cite.tidyverse = TRUE, 
+#                       output = "table",
+#                       bib.file = "grateful-refs.bib",
+#                       include.RStudio = TRUE,
+#                       out.dir = getwd(),)
+# formattable(pkgs, 
+#             table.attr = 'class=\"table table-striped\" style="font-size: 14px; font-family: Lato; width: 80%"')
+```
+
+```{r}
+sessionInfo()
+```
+
+
+## Referenser
+
+
+

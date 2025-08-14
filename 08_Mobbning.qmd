@@ -1,0 +1,1825 @@
+---
+title: "Mobbning"
+title-block-banner: "#009ca6"
+title-block-banner-color: "#FFFFFF"
+author: 
+  name: Magnus Johansson
+  affiliation: RISE Research Institutes of Sweden
+  affiliation-url: https://ri.se/shic
+  orcid: 0000-0003-1669-592X
+date: last-modified
+format: html
+execute:
+  echo: true
+  warning: false
+  message: false
+  cache: true
+editor_options: 
+  markdown: 
+    wrap: 72
+  chunk_output_type: console
+---
+
+
+```{r}
+#| label: setup
+#| include: false
+
+library(mokken)
+library(arrow)
+library(ggrepel)
+library(car)
+library(grateful) 
+library(kableExtra)
+library(readxl)
+library(tidyverse)
+library(eRm)
+library(mirt)
+library(iarm)
+library(psych)
+library(ggplot2)
+library(psychotree)
+library(matrixStats)
+library(reshape)
+library(knitr)
+library(patchwork)
+library(formattable) 
+library(easyRasch) # devtools::install_github("pgmj/easyRasch")
+library(glue)
+library(foreach)
+#library(foreign)
+library(haven)
+library(labelled)
+
+
+### some commands exist in multiple packages, here we define preferred ones that are frequently used
+select <- dplyr::select
+count <- dplyr::count
+recode <- car::recode
+rename <- dplyr::rename
+filter <- dplyr::filter
+
+# import item information
+itemlabels <- read_excel("itemlabels/MOBBNINGitemlabels.xls")
+
+# where is the data? This is for Mac
+datafolder <- "~/Library/CloudStorage/OneDrive-SharedLibraries-RISE/SHIC - Data i Dialog - Data i Dialog/data/"
+# add windows path below
+#datafolder <- "C:/Users/fridasan/RISE/SHIC - Data i Dialog - 2024/"
+
+#sthlm <- read_spss(paste0(datafolder,"Stockholm Stad/2024/Stockholmsenkäten 2002-2024 Stockholm.sav"))
+#write_parquet(sthlm, paste0(datafolder,"Stockholm Stad/2024/sthlm02-24.parquet"))
+
+df.all <- read_parquet(paste0(datafolder,"Stockholm Stad/2024/sthlm02-24.parquet"))
+#df.all <- read_parquet(paste0(datafolder,"sthlm02-24.parquet"))
+
+# subset data for this analysis
+df <- df.all %>% 
+  select(all_of(itemlabels$itemnr),Kön,ARSKURS,ar,SkolSDO)
+
+```
+
+```{r}
+#| label: recoderawdata
+#| include: false
+
+# ###### Skolfaktorer
+# # koda om svaren för items som ingår i individfaktorer, F66a-F66u i data, fråga 67 i PDF
+# # variabler df[191:211]
+# # hög poäng = hög risk
+
+df %>% 
+  select(F63) %>% 
+  pivot_longer(everything()) %>% 
+  distinct(value)
+
+df_recoded <- df %>%
+  mutate(across(f60b:f60i, ~ as.numeric(.x))) %>%
+  mutate(across(F61, ~ .x - 1),
+         across(any_of("F63"), ~ car::recode(.x, "1=1;2=0;998=NA")))
+```
+
+```{r}
+df_recoded %>% 
+  select(f60b:f60i) %>% 
+  pivot_longer(everything()) %>% 
+  distinct(value)
+
+df %>% 
+  select(F61) %>% 
+  pivot_longer(everything()) %>% 
+  distinct(value)
+
+RIdemographics(df$F61, "F61")
+sum(is.na(df$F61))
+
+df %>%
+  group_by(ar) %>%
+  summarise(NA_count = sum(is.na(F61)))
+
+df_recoded %>% 
+  select(F63) %>% 
+  pivot_longer(everything()) %>% 
+  distinct(value)
+
+df_recoded %>% 
+  as.data.frame() %>%
+  count(F61,ar) %>%
+  filter(!is.na(F61)) %>%
+  mutate(ar = str_squish(ar)) %>%
+  filter(ar =="2024")
+```
+Recode 99 and 999 to NA and make demographic variables to factors.
+
+```{r}
+df_r2 <- df_recoded %>% 
+  mutate(SkolSDO = factor(SkolSDO, levels = val_labels(df_recoded$SkolSDO),
+                          labels = names(val_labels(df_recoded$SkolSDO)))) %>% 
+  mutate(Årskurs = factor(ARSKURS, levels = val_labels(df_recoded$ARSKURS),
+                          labels = names(val_labels(df_recoded$ARSKURS)))) %>% 
+  select(!ARSKURS) %>% 
+  mutate(SkolSDO = car::recode(SkolSDO,"99=NA;'Övrigt ospecificerat'=NA"),
+         Årskurs = car::recode(Årskurs,"999=NA")) %>% 
+  mutate(Kön = factor(Kön, levels = 1:2, labels = c("Pojke","Flicka")),
+         År = as.numeric(ar)) %>% 
+  select(!ar)
+```
+
+```{r}
+library(rsample)
+set.seed(14554)
+# create dataframe with 2024 data with all variables (post recode) and only complete responses
+d <- df_r2 %>% 
+  filter(År == 2024) %>% 
+  na.omit() %>% 
+  select(!År)
+
+# Put 1/4 of the data into the training set 
+#data_split <- initial_split(df24, prop = 1/5, strata = SkolSDO)
+
+# Create data frames for the two sets:
+#d <- training(data_split)
+#d_test  <- testing(data_split)
+
+# create separate dataframe dikotom
+d_dikotom <- d %>% 
+  select(!c(F61))
+
+# create dataframes for girls
+d_flickor <- d %>%
+  filter(Kön == "Flicka")
+
+d_flickor_dif <- d_flickor %>% 
+  select(Årskurs,SkolSDO)
+
+# create dataframes for boys
+d_pojkar <- d %>%
+  filter(Kön == "Pojke")
+
+d_pojkar_dif <- d_pojkar %>% 
+  select(Årskurs,SkolSDO)
+
+# create DIF df
+d_dif <- d %>% 
+  select(Kön,Årskurs,SkolSDO)
+
+#d_testdif <- d_test %>% 
+  #select(Kön,Årskurs,SkolSDO)
+
+# create separate DIF dataframes
+
+# remove non-items
+d <- d %>% 
+  select(!c(Kön,Årskurs,SkolSDO))
+
+d_dikotom <- d_dikotom %>% 
+  select(!c(Kön,Årskurs,SkolSDO))
+
+d_flickor <- d_flickor %>% 
+  select(!c(Kön,Årskurs,SkolSDO))
+
+d_pojkar <- d_pojkar %>% 
+  select(!c(Kön,Årskurs,SkolSDO))
+#d_test <- d_test %>% 
+  #select(!c(Kön,Årskurs,SkolSDO))
+
+```
+
+## Frågor i enkäten
+
+Items i f60 inleds med texten:
+*Har du känt dig mobbad eller trakasserad i skolan det här läsåret? (Markera med ett eller flera kryss)*
+
+Item f60a har enbart kryssruta för "Nej" och har därför tagits bort. Övriga items i f60 har också kryssrutor, vilket innebär att de antingen är förkryssade eller inte. Dessa har blivit kodade som 1 när ett svar är förkryssat, och 0 när kryss saknas.
+Items i f60 motsvarar f61 i formuläret
+
+Item F61 efterfrågar frekvens på mobbning/trakassering i skolan under läsåret, och har därför fler svarskategorier.F61 motsvaras av F62 i formulerat
+
+Item F63 efterfrågar om man blivit mobbad via sociala medier med svarskategorierna Ja, Nej, Vet inte. Motsvaras av F64 i formuläret.
+
+
+## Deskriptiva data
+
+### Demografi
+
+```{r}
+#| label: descriptives1
+#| layout-ncol: 2
+RIdemographics(d_dif$Kön, "Kön")
+RIdemographics(d_dif$Årskurs, "Årskurs")
+RIdemographics(d_dif$SkolSDO, "SkolSDO")
+```
+
+### Item-data Skola negativ
+
+::: panel-tabset
+#### Tile plot
+```{r}
+RItileplot(d)
+```
+#### Stacked bars
+```{r}
+RIbarstack(d)
+```
+:::
+
+## Analys 1 
+
+```{r}
+#| column: margin
+#| echo: false
+RIlistItemsMargin(d)
+```
+
+::: panel-tabset
+### Mokken dimensionality
+```{r}
+aisp(d) %>% 
+  as.data.frame() %>% 
+  set_names("h > 0.3") %>% 
+  arrange(`h > 0.3`) %>% 
+  kbl_rise(tbl_width = 20)
+```
+### Item-restscore
+```{r}
+d %>% 
+  #select(!any_of(removed_items)) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+RIrestscore(d)
+```
+### Item-restscore flicka
+```{r}
+d %>% 
+  add_column(sex = d_dif$Kön) %>% 
+  filter(sex == "Flicka") %>% 
+  select(!sex) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+```
+### Item-restscore pojke
+```{r}
+d %>% 
+  add_column(sex = d_dif$Kön) %>% 
+  filter(sex == "Pojke") %>% 
+  select(!sex) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+```
+### PCA
+```{r}
+#| tbl-cap: "PCA of Rasch model residuals"
+RIpcmPCA(d)
+```
+### Loadings 1st contrast
+```{r}
+#| label: fig-loadloc1
+RIloadLoc(d)
+```
+### Lokalt oberoende
+```{r}
+RIpartgamLD(d)
+```
+### Targeting
+```{r}
+#| fig-height: 9
+RItargeting(d)
+```
+### Itemhierarki
+```{r}
+#| fig-height: 9
+RIitemHierarchy(d)
+```
+### Svarskategorier
+```{r}
+mirt(d, model=1, itemtype='Rasch', verbose = FALSE) %>% 
+  plot(type="trace", as.table = TRUE, 
+       theta_lim = c(-5,5))
+```
+### DIF kön
+```{r}
+RIpartgamDIF(d, d_dif$Kön)
+RIdifTableLR(d, d_dif$Kön)
+RIdifThreshFigLR(d, d_dif$Kön)
+```
+### DIF årskurs
+```{r}
+RIpartgamDIF(d, d_dif$Årskurs)
+RIdifTableLR(d, d_dif$Årskurs)
+RIdifThreshFigLR(d, d_dif$Årskurs)
+```
+:::
+
+- Mokken-analysen indikerar värde 0 för f60c, f60e, f60h, f60i och F63 och värde 1 för f60b, f60d, f60f, f60g och F61.
+- Item-restscore boostrap flaggar f60i, f60h och f60c som underfit (97/90/85) och F61, F63 och f60g som overfit
+- Itemrestscore flaggar f60c, f60g, f60h, f60i, F61 och F63 som signifikanta på 0.01
+- Item restscore kön flicka/pojke
+Underfit:
+f60h 99/54
+f60c 96/16
+f60i 93/100
+Overfit:
+F61 100/85
+F63 99/55
+f60g 92/65
+f60d 11/17
+f60f 6/61
+
+Stor skillnad i itemfit för flickor och pojkar för f60h, f60c, F63, f60g och f60f
+- PCA av residualer visar 1.64 som högsta eigenvalue
+- Figuren med faktorladdningar på första residualkontrasten (loadloc) visar lite olika kluster och högt spann på y-axeln
+- Lokala beroenden (partial gamma) visar starka beroenden för många items
+- Targeting sådär, visar både lite golv och takeffekter och trösklarna matchar inte riktigt förmågan
+- Itemhierarki visar att F61 har oordnade svarskategorier
+
+- Svarskategorier ok förutom mittenkategorierna på f54o som inte täcks
+- DIF för kön flaggas för f60c, f60g, f60d och f60b (partial gamma och table LR) samt f60f (enbart table LR). 
+- DIF årskurs flaggas för f60c (partial gamma och tableLR) och f60b (partial gamma)
+
+Slutsats: F61 svarsskala fungerar uppenbarligen inte. Den borde snarare vara en "ofta" skala, än en frekvensskala (nu är den blandad). Delar upp itemsen enligt 0 och 1 i mokken
+
+Givet de stora skillnaderna i itemfit delar vi senare upp samplet i flickor/pojkar och analyserar separat. 
+
+```{r}
+removed_items <- c("f60h")
+itemlabels %>% 
+  filter(itemnr %in% removed_items) %>% 
+  kbl_rise()
+```
+
+
+```{r}
+d_backup <- d
+
+d <- d %>% 
+  select(!any_of(removed_items))
+```
+
+## Omkodning av svarskategorier
+```{r}
+d <- d %>%
+  mutate(across(any_of(c("F61")), ~ car::recode(.x, "0=0; 1=1; 2=2; 3=2; 4=2")))
+d %>% count(F61)
+
+mirt(d, model=1, itemtype='Rasch', verbose = FALSE) %>% 
+  plot(type="trace", as.table = TRUE, 
+       theta_lim = c(-5,5))
+```
+
+
+## Analys 2
+
+```{r}
+#| column: margin
+#| echo: false
+RIlistItemsMargin(d)
+```
+
+::: panel-tabset
+### Mokken dimensionality
+```{r}
+aisp(d) %>% 
+  as.data.frame() %>% 
+  set_names("h > 0.3") %>% 
+  arrange(`h > 0.3`) %>% 
+  kbl_rise(tbl_width = 20)
+```
+### Item-restscore
+```{r}
+d %>% 
+  #select(!any_of(removed_items)) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+RIrestscore(d)
+
+d %>% 
+  filter(!is.na(F61)) %>%  
+  select(-F61) %>%         # 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+
+```
+### Item-restscore flicka
+```{r}
+d %>% 
+  add_column(sex = d_dif$Kön) %>% 
+  filter(sex == "Flicka") %>% 
+  select(!sex) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+```
+### Item-restscore pojke
+```{r}
+d %>% 
+  add_column(sex = d_dif$Kön) %>% 
+  filter(sex == "Pojke") %>% 
+  select(!sex) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+```
+### PCA
+```{r}
+#| tbl-cap: "PCA of Rasch model residuals"
+RIpcmPCA(d)
+```
+### Loadings 1st contrast
+```{r}
+#| label: fig-loadloc2
+RIloadLoc(d)
+```
+### Lokalt oberoende
+```{r}
+RIpartgamLD(d)
+```
+### Targeting
+```{r}
+#| fig-height: 9
+RItargeting(d)
+```
+### Itemhierarki
+```{r}
+#| fig-height: 9
+RIitemHierarchy(d)
+```
+### Svarskategorier
+```{r}
+mirt(d, model=1, itemtype='Rasch', verbose = FALSE) %>% 
+  plot(type="trace", as.table = TRUE, 
+       theta_lim = c(-5,5))
+```
+### DIF kön
+```{r}
+RIpartgamDIF(d, d_dif$Kön)
+RIdifTableLR(d, d_dif$Kön)
+RIdifThreshFigLR(d, d_dif$Kön)
+```
+### DIF årskurs
+```{r}
+RIpartgamDIF(d, d_dif$Årskurs)
+RIdifTableLR(d, d_dif$Årskurs)
+RIdifThreshFigLR(d, d_dif$Årskurs)
+```
+:::
+
+- Mokken-analysen indikerar värde 0 för f60c, f60e, f60i och F63 och värde 1 för f60b, f60d, f60f, f60g och F61.
+- Item-restscore boostrap flaggar f60i och f60c som underfit (91/92) och F61, F63 och f60g som overfit
+- Itemrestscore flaggar f60c, f60g, f60i, F61 och F63 som signifikanta på 0.01
+- Item restscore kön flicka/pojke
+Underfit:
+f60c 98/15
+f60i 95/100
+Overfit:
+F61 100/72
+F63 94/26
+f60g 85/67
+f60d 10/7
+f60f 0/57
+
+Stor skillnad i itemfit för flickor och pojkar för f60c, F63 och f60f
+- PCA av residualer visar 1.66 som högsta eigenvalue
+- Figuren med faktorladdningar på första residualkontrasten (loadloc) visar att f60i sticker ut på x-axeln
+- Lokala beroenden (partial gamma) visar starka beroenden för många items
+- Targeting sådär, visar både lite golv och takeffekter och trösklarna matchar inte riktigt förmågan
+- Itemhierarki visar att F61 har oordnade svarskategorier
+
+- Svarskategorier ej ok för F61
+- DIF för kön flaggas för f60c, f60g, f60d och f60b (partial gamma och table LR) samt f60f (enbart table LR). 
+- DIF årskurs flaggas för f60c (partial gamma och tableLR) och f60b (partial gamma)
+
+Slutsats: Fortsätter med att ta bort f61i pga hög underfit 
+
+```{r}
+removed_items <- c("f60h", "f60i")
+itemlabels %>% 
+  filter(itemnr %in% removed_items) %>% 
+  kbl_rise()
+```
+
+
+```{r}
+#d_backup <- d
+
+d <- d %>% 
+  select(!any_of(removed_items))
+```
+
+
+## Analys 3
+
+```{r}
+#| column: margin
+#| echo: false
+RIlistItemsMargin(d)
+```
+
+::: panel-tabset
+### Mokken dimensionality
+```{r}
+aisp(d) %>% 
+  as.data.frame() %>% 
+  set_names("h > 0.3") %>% 
+  arrange(`h > 0.3`) %>% 
+  kbl_rise(tbl_width = 20)
+```
+### Item-restscore
+```{r}
+d %>% 
+  #select(!any_of(removed_items)) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+RIrestscore(d)
+```
+### Item-restscore flicka
+```{r}
+d %>% 
+  add_column(sex = d_dif$Kön) %>% 
+  filter(sex == "Flicka") %>% 
+  select(!sex) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+```
+### Item-restscore pojke
+```{r}
+d %>% 
+  add_column(sex = d_dif$Kön) %>% 
+  filter(sex == "Pojke") %>% 
+  select(!sex) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+```
+### PCA
+```{r}
+#| tbl-cap: "PCA of Rasch model residuals"
+RIpcmPCA(d)
+```
+### Loadings 1st contrast
+```{r}
+#| label: fig-loadloc3
+RIloadLoc(d)
+```
+### Lokalt oberoende
+```{r}
+RIpartgamLD(d)
+```
+### Targeting
+```{r}
+#| fig-height: 9
+RItargeting(d)
+```
+### Itemhierarki
+```{r}
+#| fig-height: 9
+RIitemHierarchy(d)
+```
+### Svarskategorier
+```{r}
+mirt(d, model=1, itemtype='Rasch', verbose = FALSE) %>% 
+  plot(type="trace", as.table = TRUE, 
+       theta_lim = c(-5,5))
+```
+### DIF kön
+```{r}
+RIpartgamDIF(d, d_dif$Kön)
+RIdifTableLR(d, d_dif$Kön)
+RIdifThreshFigLR(d, d_dif$Kön)
+```
+### DIF årskurs
+```{r}
+RIpartgamDIF(d, d_dif$Årskurs)
+RIdifTableLR(d, d_dif$Årskurs)
+RIdifThreshFigLR(d, d_dif$Årskurs)
+```
+:::
+
+- Mokken-analysen indikerar värde 0 för f60c, f60e och F63 och värde 1 för f60b, f60d, f60f, f60g och F61.
+- Item-restscore boostrap flaggar f60c som underfit (93) och F61, F63 och f60g som overfit men betydligt mindre nu än innan
+- Itemrestscore flaggar f60c, f60g, f60i, F61 och F63 som signifikanta på 0.01
+- Item restscore kön flicka/pojke
+Underfit:
+f60c 100/20
+Overfit:
+F61 91/72
+F63 66/5
+f60g 80/31
+f60f 0/23
+
+Stor skillnad i itemfit för flickor och pojkar för f60c, F63 och f60f
+- PCA av residualer visar 1.66 som högsta eigenvalue
+- Figuren med faktorladdningar på första residualkontrasten (loadloc) visar atlite spretigt med x-axeln framför allt är f60b och f60c långt ifrån varandra
+- Lokala beroenden (partial gamma) visar starka beroenden för många items, framför allt är f60d korrelerat med många andra items
+- Targeting sådär, visar både lite golv och takeffekter 
+- Itemhierarki visar att F61 har oordnade svarskategorier
+
+- Svarskategorier ej ok för F61
+- DIF för kön flaggas för f60c, f60g, f60d och f60b (partial gamma och table LR) samt f60f (enbart table LR). 
+- DIF årskurs flaggas för f60c (partial gamma och tableLR)
+
+Slutsats: Fortsätter med att ta bort f60c pga hög underfit
+
+```{r}
+removed_items <- c("f60h", "f60i", "f60c")
+itemlabels %>% 
+  filter(itemnr %in% removed_items) %>% 
+  kbl_rise()
+```
+
+
+```{r}
+#d_backup <- d
+
+d <- d %>% 
+  select(!any_of(removed_items))
+```
+
+
+## Analys 4
+
+```{r}
+#| column: margin
+#| echo: false
+RIlistItemsMargin(d)
+```
+
+::: panel-tabset
+### Mokken dimensionality
+```{r}
+aisp(d) %>% 
+  as.data.frame() %>% 
+  set_names("h > 0.3") %>% 
+  arrange(`h > 0.3`) %>% 
+  kbl_rise(tbl_width = 20)
+```
+### Item-restscore
+```{r}
+d %>% 
+  #select(!any_of(removed_items)) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+RIrestscore(d)
+```
+### Item-restscore flicka
+```{r}
+d %>% 
+  add_column(sex = d_dif$Kön) %>% 
+  filter(sex == "Flicka") %>% 
+  select(!sex) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+```
+### Item-restscore pojke
+```{r}
+d %>% 
+  add_column(sex = d_dif$Kön) %>% 
+  filter(sex == "Pojke") %>% 
+  select(!sex) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+```
+### PCA
+```{r}
+#| tbl-cap: "PCA of Rasch model residuals"
+RIpcmPCA(d)
+```
+### Loadings 1st contrast
+```{r}
+#| label: fig-loadloc4
+RIloadLoc(d)
+```
+### Lokalt oberoende
+```{r}
+RIpartgamLD(d)
+```
+### Targeting
+```{r}
+#| fig-height: 9
+RItargeting(d)
+```
+### Itemhierarki
+```{r}
+#| fig-height: 9
+RIitemHierarchy(d)
+```
+### Svarskategorier
+```{r}
+mirt(d, model=1, itemtype='Rasch', verbose = FALSE) %>% 
+  plot(type="trace", as.table = TRUE, 
+       theta_lim = c(-5,5))
+```
+### DIF kön
+```{r}
+RIpartgamDIF(d, d_dif$Kön)
+RIdifTableLR(d, d_dif$Kön)
+RIdifThreshFigLR(d, d_dif$Kön)
+```
+### DIF årskurs
+```{r}
+RIpartgamDIF(d, d_dif$Årskurs)
+RIdifTableLR(d, d_dif$Årskurs)
+RIdifThreshFigLR(d, d_dif$Årskurs)
+```
+:::
+
+- Mokken-analysen indikerar värde 0 för f60e och F63 och värde 1 för f60b, f60d, f60f, f60g och F61.
+- Item-restscore boostrap flaggar f60e som svagt underfit (17) och f60g som overfit men betydligt mindre nu än innan (45)
+- Itemrestscore flaggar f60g som signifikanta på 0.01
+- Item restscore kön flicka/pojke
+Underfit:
+f60c 27/0
+f60e 0/16
+Overfit:
+F63 15/0
+f60g 74/19
+f60f 0/15
+
+Stor skillnad i itemfit för flickor och pojkar för f60c, F63 och f60f
+- PCA av residualer visar 1.66 som högsta eigenvalue
+- Figuren med faktorladdningar på första residualkontrasten (loadloc) visar atlite spretigt med x-axeln framför allt är f60b och f60e långt ifrån varandra
+- Lokala beroenden (partial gamma) visar starka beroenden för många items, framför allt är f60d korrelerat med många andra items
+- Targeting sådär, visar både lite golv och takeffekter 
+- Itemhierarki visar att F61 har oordnade svarskategorier
+
+- Svarskategorier ej ok för F61
+- DIF för kön flaggas för f60c, f60g, f60d och f60b (partial gamma och table LR) samt f60f (enbart table LR). 
+- DIF årskurs flaggas för f60c (partial gamma och tableLR)
+
+Slutsats: Fortsätter med att slå ihop svarskategorier för F61 samt tar bort f60g som har overfit och korrelerar med f60d och f60f.
+
+```{r}
+removed_items <- c("f60h", "f60i", "f60c", "f60g")
+itemlabels %>% 
+  filter(itemnr %in% removed_items) %>% 
+  kbl_rise()
+```
+
+
+```{r}
+#d_backup <- d
+
+d <- d %>% 
+  select(!any_of(removed_items))
+```
+
+## Analys 5
+
+```{r}
+#| column: margin
+#| echo: false
+RIlistItemsMargin(d)
+```
+
+::: panel-tabset
+### Mokken dimensionality
+```{r}
+aisp(d) %>% 
+  as.data.frame() %>% 
+  set_names("h > 0.3") %>% 
+  arrange(`h > 0.3`) %>% 
+  kbl_rise(tbl_width = 20)
+```
+### Item-restscore
+```{r}
+d %>% 
+  #select(!any_of(removed_items)) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+RIrestscore(d)
+```
+### Item-restscore flicka
+```{r}
+d %>% 
+  add_column(sex = d_dif$Kön) %>% 
+  filter(sex == "Flicka") %>% 
+  select(!sex) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+```
+### Item-restscore pojke
+```{r}
+d %>% 
+  add_column(sex = d_dif$Kön) %>% 
+  filter(sex == "Pojke") %>% 
+  select(!sex) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+```
+### PCA
+```{r}
+#| tbl-cap: "PCA of Rasch model residuals"
+RIpcmPCA(d)
+```
+### Loadings 1st contrast
+```{r}
+#| label: fig-loadloc5
+RIloadLoc(d)
+```
+### Lokalt oberoende
+```{r}
+RIpartgamLD(d)
+```
+### Residualkorrelationer
+```{r}
+#| label: tbl-rescoreskola5
+simcor5 <- RIgetResidCor(d, iterations = 500, cpu = 8)
+
+RIresidcorr(d, cutoff = simcor5$p99)
+```
+### Targeting
+```{r}
+#| fig-height: 9
+RItargeting(d)
+```
+### Itemhierarki
+```{r}
+#| fig-height: 9
+RIitemHierarchy(d)
+```
+### Conditional LRT
+```{r}
+clr_tests(d, model = "PCM")
+RIbootLRT(d, samplesize = 500, cpu = 8)
+```
+### DIF kön
+```{r}
+RIpartgamDIF(d, d_dif$Kön)
+RIdifTableLR(d, d_dif$Kön)
+RIdifThreshFigLR(d, d_dif$Kön)
+```
+### DIF årskurs
+```{r}
+RIpartgamDIF(d, d_dif$Årskurs)
+RIdifTableLR(d, d_dif$Årskurs)
+RIdifThreshFigLR(d, d_dif$Årskurs)
+```
+:::
+
+- Mokken-analysen indikerar värde 0 för f60e och F63 och värde 1 för f60b, f60d, f60f och F61.
+- Item-restscore boostrap flaggar f60e som svagt underfit (13) och F63 som svagt overfit (10)
+- Itemrestscore flaggar inget item som signifikant på 0.01
+- Item restscore kön flicka/pojke
+Underfit:
+f60e 9/5
+Overfit:
+F63 24/0
+f60f 0/11
+F61 0/16
+
+Stor skillnad i itemfit för flickor och pojkar för f60c, F63 och f60f
+- PCA av residualer visar 1.58 som högsta eigenvalue
+- Figuren med faktorladdningar på första residualkontrasten (loadloc) visar lite spretigt med x-axeln 
+- Lokala beroenden (partial gamma) visar starka beroenden för många items. f60d är korrelerat med f60f, F63 är korrelerat med f60e, F61 är korrelerat med f60b.
+- Residualkorrelation mellan f60d och f60f
+- Targeting sådär, gap i trösklar och förmåga
+- Itemhierarki visar helt ok spridning
+- Conditional LRT visar 60% statistiskt signifikanta observationer
+- DIF för kön flaggas för f60d och f60e (partial gamma och table LR) samt f60b (enbart partial gamma). 
+- DIF årskurs flaggas för f60e (partial gamma)
+
+Slutsats: Borde ta bort f60d för start korrelation med f60f samt dålig DIF på kön
+
+```{r}
+removed_items <- c("f60h", "f60i", "f60c", "f60g", "f60d")
+itemlabels %>% 
+  filter(itemnr %in% removed_items) %>% 
+  kbl_rise()
+```
+
+
+```{r}
+#d_backup <- d
+
+d <- d %>% 
+  select(!any_of(removed_items))
+```
+
+## Analys 6
+
+```{r}
+#| column: margin
+#| echo: false
+RIlistItemsMargin(d)
+```
+
+::: panel-tabset
+### Mokken dimensionality
+```{r}
+aisp(d) %>% 
+  as.data.frame() %>% 
+  set_names("h > 0.3") %>% 
+  arrange(`h > 0.3`) %>% 
+  kbl_rise(tbl_width = 20)
+```
+### Conditional infit
+```{r}
+simfit6 <- RIgetfit(d, iterations = 200, cpu = 8)
+RIitemfit(d, simfit6)
+```
+### Item-restscore
+```{r}
+d %>% 
+  #select(!any_of(removed_items)) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+RIrestscore(d)
+```
+### Item-restscore flicka
+```{r}
+d %>% 
+  add_column(sex = d_dif$Kön) %>% 
+  filter(sex == "Flicka") %>% 
+  select(!sex) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+```
+### Item-restscore pojke
+```{r}
+d %>% 
+  add_column(sex = d_dif$Kön) %>% 
+  filter(sex == "Pojke") %>% 
+  select(!sex) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+```
+### PCA
+```{r}
+#| tbl-cap: "PCA of Rasch model residuals"
+RIpcmPCA(d)
+```
+### Loadings 1st contrast
+```{r}
+#| label: fig-loadloc6
+RIloadLoc(d)
+```
+### Lokalt oberoende
+```{r}
+RIpartgamLD(d)
+```
+### Residualkorrelationer
+```{r}
+#| label: tbl-rescoreskola6
+simcor6 <- RIgetResidCor(d, iterations = 500, cpu = 8)
+
+RIresidcorr(d, cutoff = simcor6$p99)
+```
+### Targeting
+```{r}
+#| fig-height: 9
+RItargeting(d)
+```
+### Itemhierarki
+```{r}
+#| fig-height: 9
+RIitemHierarchy(d)
+```
+### Conditional LRT
+```{r}
+clr_tests(d, model = "PCM")
+RIbootLRT(d, samplesize = 500, cpu = 8)
+```
+### DIF kön
+```{r}
+RIpartgamDIF(d, d_dif$Kön)
+RIdifTableLR(d, d_dif$Kön)
+RIdifThreshFigLR(d, d_dif$Kön)
+```
+### DIF årskurs
+```{r}
+RIpartgamDIF(d, d_dif$Årskurs)
+RIdifTableLR(d, d_dif$Årskurs)
+RIdifThreshFigLR(d, d_dif$Årskurs)
+```
+:::
+
+- Mokken-analysen indikerar värde 0 för F63, värde 1 för f60e, f60f och värde 2 för f60b och F61.
+- Conditional itemfit visar ögt värde på f60e och lågt värde på F61 (dock väldigt nära trösklarna)
+- Item-restscore boostrap flaggar f60e som svagt underfit (13) och F63 som svagt overfit (11)
+- Itemrestscore flaggar inget item som signifikant på 0.01
+- Item restscore kön flicka/pojke
+Underfit:
+f60e 19/14
+Overfit:
+F63 26/0
+
+Stor skillnad i itemfit för flickor och pojkar för f60c, F63 och f60f
+- PCA av residualer visar 1.63 som högsta eigenvalue
+- Figuren med faktorladdningar på första residualkontrasten (loadloc) visar lite spretigt med x-axeln 
+- Lokala beroenden (partial gamma) visar starka beroenden mellan F63 är korrelerat med f60e och F61 är korrelerat med f60b.
+- Residualkorrelation mellan F63 och f60e är svag (0.06)
+- Targeting sådär, gap i trösklar och förmåga
+- Itemhierarki visar helt ok spridning
+- Conditional LRT visar 58% statistiskt signifikanta observationer
+- DIF för kön flaggas för f60b (partial gamma och table LR) samt f60e (enbart partial gamma) och f60f (enbart tableLR)
+- DIF årskurs flaggas för f60e (partial gamma)
+
+Slutsats: Mokken visar fortfarande på multidimensionalitet trots att item fit inte är ett problem längre. Gåt vidare och tittar på reliabiliet
+
+
+### Reliabilitet
+```{r}
+d %>% 
+  select(!any_of(removed_items)) %>% 
+  RItif(samplePSI = T)
+```
+
+### Item-parametrar
+```{r}
+itemlabels %>% 
+  filter(itemnr %in% names(d)) %>% 
+  write_csv("results/Mobbning_itemnr.csv")
+
+d %>% 
+  select(!any_of(removed_items)) %>% 
+  RIitemparams()
+
+d %>% 
+  select(!any_of(removed_items)) %>% 
+  RIitemparams(output = "file", filename = "results/Mobbning_itemparams.csv")
+```
+
+### Targeting
+
+```{r}
+d %>% 
+  select(!any_of(removed_items)) %>% 
+  RItargeting()
+```
+
+### Person fit
+
+```{r}
+d %>% 
+  select(!any_of(removed_items)) %>% 
+  RIpfit()
+```
+
+
+### Summerande kommentar: Mycket dålig reliabilitet, ej bra targeting. Inte ett bra index. Testar nu enbart de dikotoma itemsen
+
+
+## Analys 1 dikotom
+
+```{r}
+#| column: margin
+#| echo: false
+RIlistItemsMargin(d_dikotom)
+```
+
+::: panel-tabset
+### Mokken dimensionality
+```{r}
+aisp(d_dikotom) %>% 
+  as.data.frame() %>% 
+  set_names("h > 0.3") %>% 
+  arrange(`h > 0.3`) %>% 
+  kbl_rise(tbl_width = 20)
+```
+### Item-restscore
+```{r}
+d_dikotom %>% 
+  #select(!any_of(removed_items)) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+RIrestscore(d)
+```
+### Item-restscore flicka
+```{r}
+d_dikotom %>% 
+  add_column(sex = d_dif$Kön) %>% 
+  filter(sex == "Flicka") %>% 
+  select(!sex) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+```
+### Item-restscore pojke
+```{r}
+d_dikotom %>% 
+  add_column(sex = d_dif$Kön) %>% 
+  filter(sex == "Pojke") %>% 
+  select(!sex) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+```
+### PCA
+```{r}
+#| tbl-cap: "PCA of Rasch model residuals"
+RIrmPCA(d_dikotom)
+```
+### Loadings 1st contrast
+```{r}
+#| label: fig-loadloc11
+RIloadLoc(d_dikotom, model = "RM")
+```
+### Lokalt oberoende
+```{r}
+RIpartgamLD(d_dikotom)
+```
+### Targeting
+```{r}
+#| fig-height: 9
+RItargeting(d_dikotom, model = "RM")
+```
+### Itemhierarki
+```{r}
+#| fig-height: 9
+#RIitemHierarchy(d)
+
+d_dikotom.erm <- RM(d_dikotom)
+plotPImap(d_dikotom.erm, sorted = T)
+
+```
+### DIF kön
+```{r}
+RIpartgamDIF(d, d_dif$Kön)
+RIdifTableLR(d, d_dif$Kön)
+RIdifThreshFigLR(d, d_dif$Kön)
+```
+### DIF årskurs
+```{r}
+RIpartgamDIF(d, d_dif$Årskurs)
+RIdifTableLR(d, d_dif$Årskurs)
+RIdifThreshFigLR(d, d_dif$Årskurs)
+```
+:::
+
+- Mokken-analysen indikerar värde 0 för f60c, f60e, f60h, f60i och F63 och värde 1 för f60b, f60d, f60f, f60g
+- Item-restscore boostrap flaggar f60i, f60h och f60c som underfit (100/68/31) och F63, f60g och f60e som overfit (100/93/66)
+- Itemrestscore flaggar f60c, f60g, f60h, f60i, F61 som signifikanta på 0.01
+- Item restscore kön flicka/pojke
+Underfit:
+f60h 93/28
+f60c 44/0
+f60i 99/100
+f0b 10
+Overfit:
+F63 100/95
+f60g 98/75
+f60f 8/51
+f60e 0/21
+
+Stor skillnad i itemfit för flickor och pojkar för f60h, f60c, F63, f60g och f60f
+- PCA av residualer visar 1.40 som högsta eigenvalue
+- Figuren med faktorladdningar på första residualkontrasten (loadloc) visar lite olika kluster och högt spann på y-axeln
+- Lokala beroenden (partial gamma) visar starka beroenden för många items framför allt F63 med f60i, kan vara så att det är just mobbing på sociala medier som fångas upp av f60i
+- Targeting sådär, visar både lite golv och takeffekter och trösklarna matchar inte riktigt förmågan
+
+
+- DIF för kön flaggas för f60c, f60g, f60d och f60b (partial gamma och table LR) samt f60f (enbart table LR). 
+- DIF årskurs flaggas för f60c (partial gamma och tableLR) och f60b (partial gamma)
+
+Slutsats: Tar bort F63 för mycket av mobbingen verkar ske på sociala medier.
+
+```{r}
+removed_items <- c("F63")
+itemlabels %>% 
+  filter(itemnr %in% removed_items) %>% 
+  kbl_rise()
+```
+
+
+```{r}
+#d_backup <- d
+
+d_dikotom <- d_dikotom %>% 
+  select(!any_of(removed_items))
+```
+
+## Analys 2 dikotom
+
+```{r}
+#| column: margin
+#| echo: false
+RIlistItemsMargin(d_dikotom)
+```
+
+::: panel-tabset
+### Mokken dimensionality
+```{r}
+aisp(d_dikotom) %>% 
+  as.data.frame() %>% 
+  set_names("h > 0.3") %>% 
+  arrange(`h > 0.3`) %>% 
+  kbl_rise(tbl_width = 20)
+```
+### Item-restscore
+```{r}
+d_dikotom %>% 
+  #select(!any_of(removed_items)) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+RIrestscore(d_dikotom)
+```
+### Item-restscore flicka
+```{r}
+d_dikotom %>% 
+  add_column(sex = d_dif$Kön) %>% 
+  filter(sex == "Flicka") %>% 
+  select(!sex) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+```
+### Item-restscore pojke
+```{r}
+d_dikotom %>% 
+  add_column(sex = d_dif$Kön) %>% 
+  filter(sex == "Pojke") %>% 
+  select(!sex) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+```
+### PCA
+```{r}
+#| tbl-cap: "PCA of Rasch model residuals"
+RIrmPCA(d_dikotom)
+```
+### Loadings 1st contrast
+```{r}
+#| label: fig-loadloc122
+RIloadLoc(d_dikotom, model = "RM")
+```
+### Lokalt oberoende
+```{r}
+RIpartgamLD(d_dikotom)
+```
+### Targeting
+```{r}
+#| fig-height: 9
+RItargeting(d_dikotom, model = "RM")
+```
+### Itemhierarki
+```{r}
+#| fig-height: 9
+#RIitemHierarchy(d)
+
+d_dikotom.erm <- RM(d_dikotom)
+plotPImap(d_dikotom.erm, sorted = T)
+
+```
+### DIF kön
+```{r}
+RIpartgamDIF(d_dikotom, d_dif$Kön)
+#RIdifTableLR(d_dikotom, d_dif$Kön)
+#RIdifThreshFigLR(d, d_dif$Kön)
+```
+### DIF årskurs
+```{r}
+RIpartgamDIF(d_dikotom, d_dif$Årskurs)
+#RIdifTableLR(d, d_dif$Årskurs)
+#RIdifThreshFigLR(d, d_dif$Årskurs)
+```
+:::
+
+- Mokken-analysen indikerar värde 0 för f60c, f60e, f60h, f60i och värde 1 för f60b, f60d, f60f, f60g
+- Item-restscore boostrap flaggar f60i, f60h och f60c som underfit (100/21) och f60g och f60e som overfit (92/43)
+- Itemrestscore flaggar f60e, f60g, f60i som signifikanta på 0.01
+- Item restscore kön flicka/pojke
+Underfit:
+f60h 51/21
+f60i 100/100
+f0b 10
+Overfit:
+f60g 100/76
+f60f 10/42
+f60e 55/19
+f60d 33/33
+
+Stor skillnad i itemfit för flickor och pojkar för f60h, f60g, f60e och f60f
+- PCA av residualer visar 1.43 som högsta eigenvalue
+- Figuren med faktorladdningar på första residualkontrasten (loadloc) visar lite olika kluster och högt spann på y-axeln
+- Lokala beroenden (partial gamma) visar starka beroenden för många items framför allt f60g och f60d och f60d och f60f
+- Targeting sådär, visar både lite golv och takeffekter och trösklarna matchar inte riktigt förmågan
+- Itemhierarki visar att F61 har oordnade svarskategorier
+
+
+- DIF för kön flaggas för f60c, f60g, f60d och f60b (partial gamma och table LR) samt f60f (enbart table LR). 
+- DIF årskurs flaggas för f60c (partial gamma och tableLR) och f60b (partial gamma)
+
+Slutsats: Tar bort f60i pga starkt underfit och f60d pga många korrelationer
+
+
+```{r}
+removed_items <- c("F63", "f60i", "f60d")
+itemlabels %>% 
+  filter(itemnr %in% removed_items) %>% 
+  kbl_rise()
+```
+
+
+```{r}
+#d_backup <- d
+
+d_dikotom <- d_dikotom %>% 
+  select(!any_of(removed_items))
+```
+
+## Analys 3 dikotom
+
+```{r}
+#| column: margin
+#| echo: false
+RIlistItemsMargin(d_dikotom)
+```
+
+::: panel-tabset
+### Mokken dimensionality
+```{r}
+aisp(d_dikotom) %>% 
+  as.data.frame() %>% 
+  set_names("h > 0.3") %>% 
+  arrange(`h > 0.3`) %>% 
+  kbl_rise(tbl_width = 20)
+```
+### Item-restscore
+```{r}
+d_dikotom %>% 
+  #select(!any_of(removed_items)) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+RIrestscore(d_dikotom)
+```
+### Item-restscore flicka
+```{r}
+d_dikotom %>% 
+  add_column(sex = d_dif$Kön) %>% 
+  filter(sex == "Flicka") %>% 
+  select(!sex) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+```
+### Item-restscore pojke
+```{r}
+d_dikotom %>% 
+  add_column(sex = d_dif$Kön) %>% 
+  filter(sex == "Pojke") %>% 
+  select(!sex) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+```
+### PCA
+```{r}
+#| tbl-cap: "PCA of Rasch model residuals"
+RIrmPCA(d_dikotom)
+```
+### Loadings 1st contrast
+```{r}
+#| label: fig-loadloc12
+RIloadLoc(d_dikotom, model = "RM")
+```
+### Lokalt oberoende
+```{r}
+RIpartgamLD(d_dikotom)
+```
+### Targeting
+```{r}
+#| fig-height: 9
+RItargeting(d_dikotom, model = "RM")
+```
+### Itemhierarki
+```{r}
+#| fig-height: 9
+#RIitemHierarchy(d)
+
+d_dikotom.erm <- RM(d_dikotom)
+plotPImap(d_dikotom.erm, sorted = T)
+
+```
+### DIF kön
+```{r}
+RIpartgamDIF(d_dikotom, d_dif$Kön)
+#RIdifTableLR(d_dikotom, d_dif$Kön)
+#RIdifThreshFigLR(d, d_dif$Kön)
+```
+### DIF årskurs
+```{r}
+RIpartgamDIF(d_dikotom, d_dif$Årskurs)
+#RIdifTableLR(d, d_dif$Årskurs)
+#RIdifThreshFigLR(d, d_dif$Årskurs)
+```
+:::
+
+- Mokken-analysen indikerar värde 0 för f60c, f60e, f60h och värde 1 för f60b,f60f, f60g
+- Item-restscore boostrap flaggar f60h som underfit (60) och f60g och f60e som overfit (52/25)
+- Itemrestscore flaggar f60g, f60h som signifikanta på 0.01
+- Item restscore kön flicka/pojke
+Underfit:
+f60h 73/48
+Overfit:
+f60g 91/16
+f60e 26/6
+
+Stor skillnad i itemfit för flickor och pojkar för f60h och f60g
+- PCA av residualer visar 1.5 som högsta eigenvalue
+- Figuren med faktorladdningar på första residualkontrasten (loadloc) visar lite olika kluster och högt spann på y-axeln
+- Lokala beroenden (partial gamma) visar starka beroenden för många items framför allt f60g
+- Targeting sådär
+
+- DIF för kön flaggas för f60c, f60g, f60b (partial gamma och table LR) 
+- DIF årskurs flaggas för f60c, f60b och f60e
+
+Slutsats: Tar bort f60g pga overfit och korrelationer med f60f ch f60b
+
+```{r}
+removed_items <- c("F63", "f60i", "f60d", "f60g")
+itemlabels %>% 
+  filter(itemnr %in% removed_items) %>% 
+  kbl_rise()
+```
+
+
+```{r}
+#d_backup <- d
+
+d_dikotom <- d_dikotom %>% 
+  select(!any_of(removed_items))
+```
+
+## Analys 4 dikotom
+
+```{r}
+#| column: margin
+#| echo: false
+RIlistItemsMargin(d_dikotom)
+```
+
+::: panel-tabset
+### Mokken dimensionality
+```{r}
+aisp(d_dikotom) %>% 
+  as.data.frame() %>% 
+  set_names("h > 0.3") %>% 
+  arrange(`h > 0.3`) %>% 
+  kbl_rise(tbl_width = 20)
+```
+### Conditional infit
+```{r}
+simfit41 <- RIgetfit(d_dikotom, iterations = 200, cpu = 8)
+RIitemfit(d_dikotom, simfit41)
+```
+### Item-restscore
+```{r}
+d_dikotom %>% 
+  #select(!any_of(removed_items)) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+RIrestscore(d_dikotom)
+```
+### Item-restscore flicka
+```{r}
+d_dikotom %>% 
+  add_column(sex = d_dif$Kön) %>% 
+  filter(sex == "Flicka") %>% 
+  select(!sex) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+```
+### Item-restscore pojke
+```{r}
+d_dikotom %>% 
+  add_column(sex = d_dif$Kön) %>% 
+  filter(sex == "Pojke") %>% 
+  select(!sex) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+```
+### PCA
+```{r}
+#| tbl-cap: "PCA of Rasch model residuals"
+RIrmPCA(d_dikotom)
+```
+### Loadings 1st contrast
+```{r}
+#| label: fig-loadloc42
+RIloadLoc(d_dikotom, model = "RM")
+```
+### Lokalt oberoende
+```{r}
+RIpartgamLD(d_dikotom)
+```
+### Residualkorrelationer
+```{r}
+#| label: tbl-rescoreskola42
+simcor42 <- RIgetResidCor(d_dikotom, iterations = 500, cpu = 8)
+
+RIresidcorr(d_dikotom, cutoff = simcor42$p99)
+```
+### Targeting
+```{r}
+#| fig-height: 9
+RItargeting(d_dikotom, model = "RM")
+```
+### Itemhierarki
+```{r}
+#| fig-height: 9
+#RIitemHierarchy(d)
+
+d_dikotom.erm <- RM(d_dikotom)
+plotPImap(d_dikotom.erm, sorted = T)
+
+```
+### Conditional LRT
+```{r}
+clr_tests(d_dikotom, model = "RM")
+RIbootLRT(d_dikotom, samplesize = 500, cpu = 8)
+```
+### DIF kön
+```{r}
+RIpartgamDIF(d_dikotom, d_dif$Kön)
+#RIdifTableLR(d_dikotom, d_dif$Kön)
+RIdifThreshFigLR(d, d_dif$Kön)
+```
+### DIF årskurs
+```{r}
+RIpartgamDIF(d_dikotom, d_dif$Årskurs)
+#RIdifTableLR(d, d_dif$Årskurs)
+RIdifThreshFigLR(d, d_dif$Årskurs)
+```
+:::
+
+- Mokken-analysen indikerar värde 0 för f60c, f60b, f60h och värde 1 för f60e,f60f
+- Conditional infit flaggar lågt på f60e och högt på f60h
+- Item-restscore boostrap flaggar f60h som underfit (25) och f60e som overfit (17)
+- Itemrestscore flaggar f60e och f60h som signifikanta på 0.01
+- Item restscore kön flicka/pojke
+Underfit:
+f60h 38/40
+Overfit:
+f60e 19/8
+
+Stor skillnad i itemfit för flickor och pojkar för f60h och f60g
+- PCA av residualer visar 1.5 som högsta eigenvalue
+- Figuren med faktorladdningar på första residualkontrasten (loadloc) visar att f60b sticker ut något
+- Lokala beroenden (partial gamma) visar starka beroenden mellan f60e och f60c och f60e och f60b
+- Residualkorrelationer mellan f60f och f60h
+- Targeting sådär
+
+- DIF för kön flaggas för f60c, f60g, f60b (partial gamma och table LR) 
+- DIF årskurs flaggas för f60c, f60b och f60e
+
+Slutsats: Ta bort f60e i en analys 5 men visa fortfarande targeting etc här
+
+### DIF över årtal
+
+::: panel-tabset
+#### Data prep
+```{r}
+df_r2 %>% 
+  select(f60b, f60c, f60e, f60f, f60h, År) %>% 
+  count(År)
+
+difdata <- df_r2 %>% 
+  select(f60b, f60c, f60e, f60f, f60h, År) %>% 
+  filter(År > 2012) %>% 
+  na.omit()
+
+difdata %>% 
+  count(År)
+
+dif_år <- difdata$År
+difdata$År <- NULL
+```
+
+#### DIF tabell
+```{r}
+RIdifTable(difdata,dif_år)
+```
+#### DIF figur
+```{r}
+RIdifFigure(difdata,dif_år) +
+  scale_y_continuous(limits = c(-2,2))
+```
+:::
+
+### Reliabilitet
+```{r}
+#| fig-height: 4
+d_dikotom %>% 
+  select(!any_of(removed_items)) %>% 
+  RItif(samplePSI = TRUE, model = "RM")
+```
+
+### Item-parametrar
+```{r}
+itemlabels %>% 
+  filter(itemnr %in% names(d_dikotom)) %>% 
+  write_csv("results/Mobbningd_itemnr.csv")
+
+#Fungerar inte med dikotoma items
+#d_dikotom %>% 
+  #select(!any_of(removed_items)) %>% 
+  #RIitemparams()
+
+#d_dikotom %>% 
+  #select(!any_of(removed_items)) %>% 
+  #RIitemparams(output = "file", filename = "results/Mobbningd_itemparams.csv")
+```
+
+### Targeting
+
+```{r}
+#| fig-height: 4
+RItargeting(d_dikotom, model = "RM")
+```
+
+### Person fit
+
+```{r}
+d_dikotom %>% 
+  select(!any_of(removed_items)) %>% 
+  RIpfit()
+```
+
+```{r}
+removed_items <- c("F63", "f60i", "f60d", "f60g", "f60e")
+itemlabels %>% 
+  filter(itemnr %in% removed_items) %>% 
+  kbl_rise()
+```
+
+
+```{r}
+#d_backup <- d
+
+d_dikotom <- d_dikotom %>% 
+  select(!any_of(removed_items))
+```
+
+## Analys 5 dikotom
+
+```{r}
+#| column: margin
+#| echo: false
+RIlistItemsMargin(d_dikotom)
+```
+
+::: panel-tabset
+### Mokken dimensionality
+```{r}
+aisp(d_dikotom) %>% 
+  as.data.frame() %>% 
+  set_names("h > 0.3") %>% 
+  arrange(`h > 0.3`) %>% 
+  kbl_rise(tbl_width = 20)
+```
+### Conditional infit
+```{r}
+simfit41 <- RIgetfit(d_dikotom, iterations = 200, cpu = 8)
+RIitemfit(d_dikotom, simfit41)
+```
+### Item-restscore
+```{r}
+d_dikotom %>% 
+  #select(!any_of(removed_items)) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+RIrestscore(d_dikotom)
+```
+### Item-restscore flicka
+```{r}
+d_dikotom %>% 
+  add_column(sex = d_dif$Kön) %>% 
+  filter(sex == "Flicka") %>% 
+  select(!sex) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+```
+### Item-restscore pojke
+```{r}
+d_dikotom %>% 
+  add_column(sex = d_dif$Kön) %>% 
+  filter(sex == "Pojke") %>% 
+  select(!sex) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+```
+### PCA
+```{r}
+#| tbl-cap: "PCA of Rasch model residuals"
+RIrmPCA(d_dikotom)
+```
+### Loadings 1st contrast
+```{r}
+#| label: fig-loadloc5dikotom
+RIloadLoc(d_dikotom, model = "RM")
+```
+### Lokalt oberoende
+```{r}
+RIpartgamLD(d_dikotom)
+```
+### Residualkorrelationer
+```{r}
+#| label: tbl-rescoreskola5dikotom
+simcor52 <- RIgetResidCor(d_dikotom, iterations = 500, cpu = 8)
+
+RIresidcorr(d_dikotom, cutoff = simcor52$p99)
+```
+### Targeting
+```{r}
+#| fig-height: 9
+RItargeting(d_dikotom, model = "RM")
+```
+### Itemhierarki
+```{r}
+#| fig-height: 9
+#RIitemHierarchy(d)
+
+d_dikotom.erm <- RM(d_dikotom)
+plotPImap(d_dikotom.erm, sorted = T)
+
+```
+### Conditional LRT
+```{r}
+clr_tests(d_dikotom, model = "RM")
+RIbootLRT(d_dikotom, samplesize = 500, cpu = 8)
+```
+### DIF kön
+```{r}
+RIpartgamDIF(d_dikotom, d_dif$Kön)
+#RIdifTableLR(d_dikotom, d_dif$Kön)
+#RIdifThreshFigLR(d, d_dif$Kön)
+```
+### DIF årskurs
+```{r}
+RIpartgamDIF(d_dikotom, d_dif$Årskurs)
+#RIdifTableLR(d, d_dif$Årskurs)
+#RIdifThreshFigLR(d, d_dif$Årskurs)
+```
+:::
+
+- Mokken-analysen indikerar värde 0 för f60c, f60b, f60h och värde 1 för f60e,f60f
+- Conditional infit flaggar lågt på f60e och högt på f60h
+- Item-restscore boostrap flaggar f60h som underfit (25) och f60e som overfit (17)
+- Itemrestscore flaggar f60e och f60h som signifikanta på 0.01
+- Item restscore kön flicka/pojke
+Underfit:
+f60h 38/40
+Overfit:
+f60e 19/8
+
+Stor skillnad i itemfit för flickor och pojkar för f60h och f60g
+- PCA av residualer visar 1.5 som högsta eigenvalue
+- Figuren med faktorladdningar på första residualkontrasten (loadloc) visar att f60b sticker ut något
+- Lokala beroenden (partial gamma) visar starka beroenden mellan f60e och f60c och f60e och f60b
+- Residualkorrelationer mellan f60f och f60h
+- Targeting sådär
+
+- DIF för kön flaggas för f60c, f60g, f60b (partial gamma och table LR) 
+- DIF årskurs flaggas för f60c, f60b och f60e
+
+Slutsats: Ta bort f60e?
+
+### DIF över årtal
+
+::: panel-tabset
+#### Data prep
+```{r}
+df_r2 %>% 
+  select(f60b, f60c, f60e, f60f, f60h, År) %>% 
+  count(År)
+
+difdata <- df_r2 %>% 
+  select(f60b, f60c, f60e, f60f, f60h, År) %>% 
+  filter(År > 2012) %>% 
+  na.omit()
+
+difdata %>% 
+  count(År)
+
+dif_år <- difdata$År
+difdata$År <- NULL
+```
+
+#### DIF tabell
+```{r}
+RIdifTable(difdata,dif_år)
+```
+#### DIF figur
+```{r}
+RIdifFigure(difdata,dif_år) +
+  scale_y_continuous(limits = c(-2,2))
+```
+:::
+
+### Reliabilitet
+```{r}
+#| fig-height: 4
+d_dikotom %>% 
+  select(!any_of(removed_items)) %>% 
+  RItif(samplePSI = T, model = "RM")
+```
+
+### Item-parametrar
+```{r}
+itemlabels %>% 
+  filter(itemnr %in% names(d)) %>% 
+  write_csv("results/Mobbning_itemnr.csv")
+
+#Fungerar inte med dikotoma items
+#d_dikotom %>% 
+  #select(!any_of(removed_items)) %>% 
+  #RIitemparams()
+
+#d_dikotom %>% 
+  #select(!any_of(removed_items)) %>% 
+  #RIitemparams(output = "file", filename = "results/Mobbning_itemparams.csv")
+```
+
+### Targeting
+
+```{r}
+#| fig-height: 4
+RItargeting(d_dikotom, model = "RM")
+```
+
+### Person fit
+
+```{r}
+d_dikotom %>% 
+  select(!any_of(removed_items)) %>% 
+  RIpfit()
+```
+
+

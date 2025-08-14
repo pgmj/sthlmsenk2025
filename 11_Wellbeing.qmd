@@ -1,0 +1,1074 @@
+---
+title: "Välbefinnande"
+title-block-banner: "#009ca6"
+title-block-banner-color: "#FFFFFF"
+date: last-modified
+format: html
+execute:
+  echo: true
+  warning: false
+  message: false
+  cache: true
+editor_options: 
+  markdown: 
+    wrap: 72
+  chunk_output_type: console
+---
+
+```{r}
+#| label: setup
+#| include: false
+
+library(mokken)
+library(arrow)
+library(ggrepel)
+library(car)
+library(grateful) 
+library(kableExtra)
+library(readxl)
+library(tidyverse)
+library(eRm)
+library(mirt)
+library(iarm)
+library(psych)
+library(ggplot2)
+library(psychotree)
+library(matrixStats)
+library(reshape)
+library(knitr)
+library(patchwork)
+library(formattable) 
+library(easyRasch)
+#install.packages("promises")
+#devtools::install_github("pgmj/easyRasch", dependencies = TRUE)
+#devtools::install_github("pgmj/easyRasch")
+library(glue)
+library(foreach)
+#library(foreign)
+library(haven)
+library(labelled)
+
+
+### some commands exist in multiple packages, here we define preferred ones that are frequently used
+select <- dplyr::select
+count <- dplyr::count
+recode <- car::recode
+rename <- dplyr::rename
+filter <- dplyr::filter
+
+# import item information
+itemlabels <- read_excel("itemlabels/Välbefinnande_itemlabels.xls")
+
+# where is the data? This is for Mac
+datafolder <- "~/Library/CloudStorage/OneDrive-SharedLibraries-RISE/SHIC - Data i Dialog - Data i Dialog/data/"
+# add windows path below
+#datafolder <- "C:/Users/fridasan/RISE/SHIC - Data i Dialog - 2024/"
+
+#sthlm <- read_spss(paste0(datafolder,"Stockholm Stad/2024/Stockholmsenkäten 2002-2024 Stockholm.sav"))
+#write_parquet(sthlm, paste0(datafolder,"Stockholm Stad/2024/sthlm02-24.parquet"))
+
+df.all <- read_parquet(paste0(datafolder,"Stockholm Stad/2024/sthlm02-24.parquet"))
+#df.all <- read_parquet(paste0(datafolder,"sthlm02-24.parquet"))
+
+# subset data for this analysis
+df <- df.all %>% 
+  select(all_of(itemlabels$itemnr),Kön,ARSKURS,ar,SkolSDO)
+
+```
+
+
+```{r}
+RISEprimGreen <- "#009ca6"
+RISEprimRed <- "#e83c63"
+RISEprimYellow <- "#ffe500"
+RISEprimGreenMid <- "#8dc8c7"
+RISEprimRedMid <- "#f5a9ab"
+RISEprimYellowMid <- "#ffee8d"
+RISEprimGreenLight <- "#ebf5f0"
+RISEprimRedLight <- "#fde8df"
+RISEprimYellowLight <- "#fff7dd"
+RISEcompPurple <- "#482d55"
+RISEcompGreenDark <- "#0e4e65"
+RISEgrey1 <- "#f0f0f0"
+RISEgrey2 <- "#c8c8c8"
+RISEgrey3 <- "#828282"
+RISEgrey4 <- "#555555"
+
+# set some colors used later
+cutoff_line <- RISEprimRed
+dot_color <- "black"
+backg_color <- RISEprimGreenLight
+
+# set fontsize for all tables
+r.fontsize <- 15
+
+### first we pre-set our chosen cut-off values for some commonly used indices:
+msq_min <- 0.7
+msq_max <- 1.3
+zstd_min <- -2
+zstd_max <- 2
+loc_dep <- 0.2 # above average residual correlation
+dif_dif <- 0.5 # logits difference between groups in average item location (DIF)
+
+### zstd is inflated with large samples (N > 500). Reduce sample size to jz and 
+### run analysis yz random samples to get average ZSTD
+jz = 300 # number to include in dataset
+yz = 10 # number of random samples
+
+```
+
+
+```{r}
+#| label: recoderawdata
+#| include: false
+
+# ###### Välbefinnande
+# # hög poäng = lågt välbefinnande
+
+### New recode code below, using variable names instead of numbering
+
+df%>% count(f54b)
+df%>% count(f54n)
+df%>% count(F92)
+df%>% count(F99)
+df%>% count(f83e)
+df%>% count(f83h)
+df%>% count(F70)
+df%>% count(f86a)
+df%>% count(f86c)
+df%>% count(f101j)
+df%>% count(f101k)
+df%>% count(F67)
+df%>% count(F68)
+
+df_recoded <- df %>%
+  mutate(across(f54b:F68, ~ as.numeric(.x))) %>%
+  # Subtract 1 from specific columns
+  mutate(across(c(F70, F67), ~ .x - 1)) %>%
+  mutate(across(c(f54b, f54n, f83e, f83h, f86a, f86c, f101j, f101k), 
+                ~ car::recode(.x, "4=0;3=1;2=2;1=3; 998=NA"))) %>%
+  mutate(across(c(F92, F99, F68), 
+                ~ car::recode(.x, "5=0;4=1;3=2;2=3;1=4")))
+
+df_recoded %>% count(f54b)
+df_recoded %>% count(f54n)
+df_recoded %>% count(F92)
+df_recoded %>% count(F99)
+df_recoded %>% count(f83e)
+df_recoded %>% count(f83h)
+df_recoded %>% count(F70)
+df_recoded %>% count(f86a)
+df_recoded %>% count(f86c)
+df_recoded %>% count(f101j)
+df_recoded %>% count(f101k)
+df_recoded %>% count(F67)
+df_recoded %>% count(F68)
+
+```
+
+```{r}
+df_r2 <- df_recoded %>% 
+  mutate(SkolSDO = factor(SkolSDO, levels = val_labels(df_recoded$SkolSDO),
+                          labels = names(val_labels(df_recoded$SkolSDO)))) %>% 
+  mutate(Årskurs = factor(ARSKURS, levels = val_labels(df_recoded$ARSKURS),
+                          labels = names(val_labels(df_recoded$ARSKURS)))) %>% 
+  select(!ARSKURS) %>% 
+  mutate(SkolSDO = car::recode(SkolSDO,"99=NA;'Övrigt ospecificerat'=NA"),
+         Årskurs = car::recode(Årskurs,"999=NA")) %>% 
+  mutate(Kön = factor(Kön, levels = 1:2, labels = c("Pojke","Flicka")),
+         År = as.numeric(ar)) %>% 
+  select(!ar)
+```
+
+
+```{r}
+library(rsample)
+set.seed(14568)
+# create dataframe with 2024 data with all variables (post recode) and only complete responses
+df24 <- df_r2 %>% 
+  filter(År == 2024) %>% 
+  na.omit() %>% 
+  select(!År)
+
+# Put 1/5 of the data into the training set 
+data_split <- initial_split(df24, prop = 1/5, strata = SkolSDO)
+
+# Create data frames for the two sets:
+d <- training(data_split)
+d_test  <- testing(data_split)
+
+
+# create DIF df
+d_dif <- d %>% 
+  select(Kön,Årskurs,SkolSDO)
+
+d_testdif <- d_test %>% 
+  select(Kön,Årskurs,SkolSDO)
+
+# remove non-items
+d <- d %>% 
+  select(!c(Kön,Årskurs,SkolSDO))
+d_test <- d_test %>% 
+  select(!c(Kön,Årskurs,SkolSDO))
+
+```
+
+
+## Välbefinnande
+
+Detta är en explorativ analys, där vi valt ut items som kan tänkas bilda ett övergripande välbefinnande-index.
+
+Items F67 och F68 som handlar om "framtidstro" har funnits med i Stockholmsenkäten från 2016, så vi använder 2016 som utgångspunkt i denna analys.
+
+### Lista på items
+
+```{r}
+#| label: showitems
+
+itemlabels %>% 
+  filter(itemnr %in% names(d)) %>% 
+  formattable(align = c("l", "l","l"), 
+              list(itemnr = formatter("span", style = ~style(color = "grey", 
+      font.weight = "bold"))), 
+      table.attr = "class=\"table table-striped\" style=\"font-size: 15px; font-family: Lato; width: 75%\"")
+
+```
+
+
+## Deskriptiva data
+
+### Demografi
+
+```{r}
+#| label: descriptives1
+#| layout-ncol: 2
+RIdemographics(d_dif$Kön, "Kön")
+RIdemographics(d_dif$Årskurs, "Årskurs")
+RIdemographics(d_testdif$SkolSDO, "SkolSDO")
+```
+
+### Item-data Skola negativ
+
+::: panel-tabset
+#### Tile plot
+```{r}
+RItileplot(d)
+```
+#### Stacked bars
+```{r}
+RIbarstack(d)
+```
+:::
+
+Eftersom de flesta av dessa items analyserats i andra index genomför vi de omkodningar av svarskategorier enligt vad tidigare analyser rekommenderat. 
+
+OBS att alla item är kodade så att låga värden = högre välbefinnande.
+
+## Omkodning av svarskategorier
+```{r}
+mirt(d, model=1, itemtype='Rasch', verbose = FALSE) %>% 
+  plot(type="trace", as.table = TRUE, 
+       theta_lim = c(-5,5))
+```
+
+
+```{r}
+d <- d %>%
+  mutate(across(any_of(c("f54b")), ~ car::recode(.x, "0=0; 1=1; 2=2; 3=2"))) %>%
+  mutate(across(any_of(c("F92", "F99")), ~ car::recode(.x, "0=0; 1=1; 2=2; 3=2; 4=3"))) %>%
+  mutate(across(any_of(c("F70")), ~ car::recode(.x, "0=0; 1=0; 2=1; 3=1"))) %>%
+  mutate(across(any_of(c("f101j", "f101k")), ~ car::recode(.x, "0=0; 1=1; 2=2; 3=2"))) %>%
+  mutate(across(any_of(c("F67")), ~ car::recode(.x, "0=0; 1=1; 2=2; 3=2; 4=2")))
+
+
+mirt(d, model=1, itemtype='Rasch', verbose = FALSE) %>% 
+  plot(type="trace", as.table = TRUE, 
+       theta_lim = c(-5,5))
+```
+
+
+## Analys 1 
+
+```{r}
+#| column: margin
+#| echo: false
+RIlistItemsMargin(d)
+```
+
+::: panel-tabset
+### Mokken dimensionality
+```{r}
+aisp(d) %>% 
+  as.data.frame() %>% 
+  set_names("h > 0.3") %>% 
+  arrange(`h > 0.3`) %>% 
+  kbl_rise(tbl_width = 20)
+```
+
+### Item-restscore
+```{r}
+d_test %>% 
+  #select(!any_of(removed_items)) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+RIrestscore(d)
+```
+### Conditional infit
+```{r}
+simfit <- RIgetfit(d, iterations = 200, cpu = 8)
+RIitemfit(d, simfit)
+```
+### PCA
+```{r}
+#| tbl-cap: "PCA of Rasch model residuals"
+RIpcmPCA(d)
+```
+### Loadings 1st contrast
+```{r}
+RIloadLoc(d)
+```
+### Lokalt oberoende
+```{r}
+RIpartgamLD(d)
+```
+### Residualkorrelationer
+```{r}
+simcor <- RIgetResidCor(d, iterations = 500, cpu = 8)
+
+RIresidcorr(d, cutoff = simcor$p99)
+```
+### Targeting
+```{r}
+#| fig-height: 9
+RItargeting(d)
+```
+### Itemhierarki
+```{r}
+#| fig-height: 9
+RIitemHierarchy(d)
+```
+### Svarskategorier
+```{r}
+mirt(d, model=1, itemtype='Rasch', verbose = FALSE) %>% 
+  plot(type="trace", as.table = TRUE, 
+       theta_lim = c(-5,5))
+```
+### DIF kön
+```{r}
+RIpartgamDIF(d, d_dif$Kön)
+RIdifTableLR(d, d_dif$Kön)
+#| fig-height: 4
+RIdifThreshFigLR(d, d_dif$Kön)
+```
+### DIF årskurs
+```{r}
+RIpartgamDIF(d, d_dif$Årskurs)
+RIdifTableLR(d, d_dif$Årskurs)
+#| fig-height: 4
+RIdifThreshFigLR(d, d_dif$Årskurs)
+```
+:::
+
+- Mokken tyder på mycket multidimensionalitet med 5 olika dimensioner
+- Item-restscore boostrap flaggar F70 som starkt underfit (94) men även F67, F92 och F68 (39/32/21). F99, f83e, f83h är starkt overfit (92/79/79) men även 101k och f86a (69/43.
+- Itemrestscore flaggar f54b, F99, f83e, f83h, f86c, f101k och F68 som signifikanta på 0.01
+- Conditional infit flaggar F92, f83c och F68 som underfit och f83h, f83e, F99 och f54b som overfit.
+- PCA av residualer visar 2.02 som högsta eigenvalue
+- Figuren med faktorladdningar på första residualkontrasten (loadloc) visar att f86c, F70 och f86a sticker ut något på x-axel jämfört med övriga och att F92 och f54n sticker ut något på y-axeln
+- Lokala beroenden (partial gamma) visar beroenden mellan f86a och f86c, f83h och f83e, F70 och f86c, f101k och f101j, f54b och f54n, F99 och F92,
+- Residualkorrelationerna visar korrelationer mellan f86a och f86c, f101j och f101k, f86c och F70, f83e och f83h och f54b och f54n
+- Targeting ganska bra. Respondenterna befinner sig på något högre välbefinnande än vad frågorna mäter.
+- Itemhierarki visar inte så bra spridning men inga oordnade svarskategorier
+
+DIF
+- Enligt tröskellovation är det skillnader mellan kön och årskurs på f86a och något mellan F68.
+
+
+Då F70 flaggar starkt underfit börjar vi med att ta bort den
+
+
+```{r}
+removed_items <- c("F70")
+itemlabels %>% 
+  filter(itemnr %in% removed_items) %>% 
+  kbl_rise()
+```
+
+```{r}
+d_backup <- d
+d_test_backup <- d_backup
+
+d <- d %>% 
+  select(!any_of(removed_items))
+
+d_test <- d_test %>% 
+  select(!any_of(removed_items))
+```
+
+## Analys 2 
+
+```{r}
+#| column: margin
+#| echo: false
+RIlistItemsMargin(d)
+```
+
+::: panel-tabset
+### Mokken dimensionality
+```{r}
+aisp(d) %>% 
+  as.data.frame() %>% 
+  set_names("h > 0.3") %>% 
+  arrange(`h > 0.3`) %>% 
+  kbl_rise(tbl_width = 20)
+```
+
+### Item-restscore
+```{r}
+d_test %>% 
+  #select(!any_of(removed_items)) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+RIrestscore(d)
+```
+### Conditional infit
+```{r}
+simfit2 <- RIgetfit(d, iterations = 200, cpu = 8)
+RIitemfit(d, simfit2)
+```
+### PCA
+```{r}
+#| tbl-cap: "PCA of Rasch model residuals"
+RIpcmPCA(d)
+```
+### Loadings 1st contrast
+```{r}
+RIloadLoc(d)
+```
+### Lokalt oberoende
+```{r}
+RIpartgamLD(d)
+```
+### Residualkorrelationer
+```{r}
+simcor2 <- RIgetResidCor(d, iterations = 500, cpu = 8)
+
+RIresidcorr(d, cutoff = simcor2$p99)
+```
+### Targeting
+```{r}
+#| fig-height: 9
+RItargeting(d)
+```
+### Itemhierarki
+```{r}
+#| fig-height: 9
+RIitemHierarchy(d)
+```
+### Svarskategorier
+```{r}
+mirt(d, model=1, itemtype='Rasch', verbose = FALSE) %>% 
+  plot(type="trace", as.table = TRUE, 
+       theta_lim = c(-5,5))
+```
+### DIF kön
+```{r}
+RIpartgamDIF(d, d_dif$Kön)
+RIdifTableLR(d, d_dif$Kön)
+#| fig-height: 4
+RIdifThreshFigLR(d, d_dif$Kön)
+```
+### DIF årskurs
+```{r}
+RIpartgamDIF(d, d_dif$Årskurs)
+RIdifTableLR(d, d_dif$Årskurs)
+#| fig-height: 4
+RIdifThreshFigLR(d, d_dif$Årskurs)
+```
+:::
+
+Tar bort:
+- f86c som nu visar underfit och dessutom beroende med f86c samt 
+- f83h som visar korrelation med f83e men mäter ett mycket smalare spann än f83e
+- f101k som har korrelation med f101j men har en mer specifik fråga och mäter högre nivåer av välbefinnande vilket är mer representerat än lägre
+
+```{r}
+removed_items <- c("F70", "f86c", "f83h","f101k")
+itemlabels %>% 
+  filter(itemnr %in% removed_items) %>% 
+  kbl_rise()
+```
+
+```{r}
+#d_backup <- d
+
+d <- d %>% 
+  select(!any_of(removed_items))
+
+d_test <- d_test %>% 
+  select(!any_of(removed_items))
+```
+
+## Analys 3 
+
+```{r}
+#| column: margin
+#| echo: false
+RIlistItemsMargin(d)
+```
+
+::: panel-tabset
+### Mokken dimensionality
+```{r}
+aisp(d) %>% 
+  as.data.frame() %>% 
+  set_names("h > 0.3") %>% 
+  arrange(`h > 0.3`) %>% 
+  kbl_rise(tbl_width = 20)
+```
+
+### Item-restscore
+```{r}
+d_test %>% 
+  #select(!any_of(removed_items)) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+RIrestscore(d)
+```
+### Conditional infit
+```{r}
+simfit3 <- RIgetfit(d, iterations = 200, cpu = 8)
+RIitemfit(d, simfit3)
+```
+### PCA
+```{r}
+#| tbl-cap: "PCA of Rasch model residuals"
+RIpcmPCA(d)
+```
+### Loadings 1st contrast
+```{r}
+RIloadLoc(d)
+```
+### Lokalt oberoende
+```{r}
+RIpartgamLD(d)
+```
+### Residualkorrelationer
+```{r}
+simcor3 <- RIgetResidCor(d, iterations = 500, cpu = 8)
+
+RIresidcorr(d, cutoff = simcor3$p99)
+```
+### Targeting
+```{r}
+#| fig-height: 9
+RItargeting(d)
+```
+### Itemhierarki
+```{r}
+#| fig-height: 9
+RIitemHierarchy(d)
+```
+### Svarskategorier
+```{r}
+mirt(d, model=1, itemtype='Rasch', verbose = FALSE) %>% 
+  plot(type="trace", as.table = TRUE, 
+       theta_lim = c(-5,5))
+```
+### DIF kön
+```{r}
+RIpartgamDIF(d, d_dif$Kön)
+RIdifTableLR(d, d_dif$Kön)
+#| fig-height: 4
+RIdifThreshFigLR(d, d_dif$Kön)
+```
+### DIF årskurs
+```{r}
+RIpartgamDIF(d, d_dif$Årskurs)
+RIdifTableLR(d, d_dif$Årskurs)
+#| fig-height: 4
+RIdifThreshFigLR(d, d_dif$Årskurs)
+```
+:::
+
+- Nu fyra dimensioner i Mokken
+- F99 och f54b starkt overfit
+- Enligt Conditional infit verkar f86a vara underfit vilken även är starkt signifikant i itemrestscore
+- f54n och F92 sticker ut i faktorladdningarna
+- Lokalt beroende mellan F99 och F92 samt f54b och f54n
+
+Tar bort F99 på grund av starkt overfit och korrelation med F92  och f54b pga korrelation med f54n och för att f54n mäter högre grader av välbefinnande vilket blir bättre för mätskalan
+
+```{r}
+removed_items <- c("F70", "f86c", "f83h","f101k", "F99", "f54b")
+itemlabels %>% 
+  filter(itemnr %in% removed_items) %>% 
+  kbl_rise()
+```
+
+```{r}
+#d_backup <- d
+
+d <- d %>% 
+  select(!any_of(removed_items))
+
+d_test <- d_test %>% 
+  select(!any_of(removed_items))
+```
+
+## Analys 4 
+
+```{r}
+#| column: margin
+#| echo: false
+RIlistItemsMargin(d)
+```
+
+::: panel-tabset
+### Mokken dimensionality
+```{r}
+aisp(d) %>% 
+  as.data.frame() %>% 
+  set_names("h > 0.3") %>% 
+  arrange(`h > 0.3`) %>% 
+  kbl_rise(tbl_width = 20)
+```
+
+### Item-restscore
+```{r}
+d_test %>% 
+  #select(!any_of(removed_items)) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+RIrestscore(d)
+```
+### Conditional infit
+```{r}
+simfit4 <- RIgetfit(d, iterations = 200, cpu = 8)
+RIitemfit(d, simfit4)
+```
+### PCA
+```{r}
+#| tbl-cap: "PCA of Rasch model residuals"
+RIpcmPCA(d)
+```
+### Loadings 1st contrast
+```{r}
+RIloadLoc(d)
+```
+### Lokalt oberoende
+```{r}
+RIpartgamLD(d)
+```
+### Residualkorrelationer
+```{r}
+simcor4 <- RIgetResidCor(d, iterations = 500, cpu = 8)
+
+RIresidcorr(d, cutoff = simcor4$p99)
+```
+### Targeting
+```{r}
+#| fig-height: 9
+RItargeting(d)
+```
+### Itemhierarki
+```{r}
+#| fig-height: 9
+RIitemHierarchy(d)
+```
+
+### Conditional LRT
+```{r}
+clr_tests(d, model = "PCM")
+RIbootLRT(d, samplesize = 400, cpu = 8)
+```
+### Svarskategorier
+```{r}
+mirt(d, model=1, itemtype='Rasch', verbose = FALSE) %>% 
+  plot(type="trace", as.table = TRUE, 
+       theta_lim = c(-5,5))
+```
+### DIF kön
+```{r}
+RIpartgamDIF(d, d_dif$Kön)
+RIdifTableLR(d, d_dif$Kön)
+#| fig-height: 4
+RIdifThreshFigLR(d, d_dif$Kön)
+```
+### DIF årskurs
+```{r}
+RIpartgamDIF(d, d_dif$Årskurs)
+RIdifTableLR(d, d_dif$Årskurs)
+#| fig-height: 4
+RIdifThreshFigLR(d, d_dif$Årskurs)
+```
+:::
+
+- Nu bara två dimensioner i Mokken. F67 och F68 sticker ut som en egen
+- PCA acceptabel 1.45
+- Mindre korrelation mellan F68 och F67 men såpass liten att den är acceptabel
+- Targeting ok
+- Conditional LRT 42% ej statistiskt signifikanta
+
+### Reliabilitet
+
+```{r}
+d_test %>% 
+  select(!any_of(removed_items)) %>% 
+  RItif(samplePSI = T)
+```
+
+### Item-parametrar
+
+```{r}
+itemlabels %>% 
+  filter(itemnr %in% names(d)) %>% 
+  write_csv("results/wellbeing_itemnr.csv")
+
+d_test %>% 
+  select(!any_of(removed_items)) %>% 
+  RIitemparams()
+
+d_test %>% 
+  select(!any_of(removed_items)) %>% 
+  RIitemparams(output = "file", filename = "results/wellbeing_itemparams.csv")
+```
+
+### Targeting
+
+```{r}
+d_test %>% 
+  select(!any_of(removed_items)) %>% 
+  RItargeting()
+```
+
+### Person fit
+
+```{r}
+d_test %>% 
+  select(!any_of(removed_items)) %>% 
+  RIpfit()
+```
+
+
+```{r}
+removed_items <- c("F70", "f86c", "f83h","f101k", "F99", "f54b", "F67")
+itemlabels %>% 
+  filter(itemnr %in% removed_items) %>% 
+  kbl_rise()
+```
+
+```{r}
+#d_backup <- d
+
+d <- d %>% 
+  select(!any_of(removed_items))
+
+d_test <- d_test %>% 
+  select(!any_of(removed_items))
+```
+
+## Analys 4b 
+
+```{r}
+#| column: margin
+#| echo: false
+RIlistItemsMargin(d)
+```
+
+::: panel-tabset
+### Mokken dimensionality
+```{r}
+#aisp(d) %>% 
+  #as.data.frame() %>% 
+  #set_names("h > 0.3") %>% 
+  #arrange(`h > 0.3`) %>% 
+  #kbl_rise(tbl_width = 20)
+```
+
+### Item-restscore
+```{r}
+d_test %>% 
+  #select(!any_of(removed_items)) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+RIrestscore(d)
+```
+### Conditional infit
+```{r}
+simfit4b <- RIgetfit(d, iterations = 200, cpu = 8)
+RIitemfit(d, simfit4b)
+```
+### CICC
+```{r}
+RIciccPlot(d)
+```
+### PCA
+```{r}
+#| tbl-cap: "PCA of Rasch model residuals"
+RIpcmPCA(d)
+RIbootPCA(d, iterations = 200, cpu = 8)
+```
+### Loadings 1st contrast
+```{r}
+RIloadLoc(d)
+```
+### Lokalt oberoende
+```{r}
+RIpartgamLD(d)
+```
+### Residualkorrelationer
+```{r}
+simcor4b <- RIgetResidCor(d, iterations = 500, cpu = 8)
+
+RIresidcorr(d, cutoff = simcor4b$p99)
+```
+### Targeting
+```{r}
+#| fig-height: 9
+RItargeting(d)
+```
+### Itemhierarki
+```{r}
+#| fig-height: 9
+RIitemHierarchy(d)
+```
+
+### Conditional LRT
+```{r}
+clr_tests(d, model = "PCM")
+RIbootLRT(d, samplesize = 400, cpu = 8)
+```
+### Svarskategorier
+```{r}
+mirt(d, model=1, itemtype='Rasch', verbose = FALSE) %>% 
+  plot(type="trace", as.table = TRUE, 
+       theta_lim = c(-5,5))
+```
+### DIF kön
+```{r}
+RIpartgamDIF(d, d_dif$Kön)
+RIdifTableLR(d, d_dif$Kön)
+#| fig-height: 4
+RIdifThreshFigLR(d, d_dif$Kön)
+```
+### DIF årskurs
+```{r}
+RIpartgamDIF(d, d_dif$Årskurs)
+RIdifTableLR(d, d_dif$Årskurs)
+#| fig-height: 4
+RIdifThreshFigLR(d, d_dif$Årskurs)
+```
+:::
+
+- Nu bara två dimensioner i Mokken. F67 och F68 sticker ut som en egen
+- PCA acceptabel 1.45
+- Mindre korrelation mellan F68 och F67 men såpass liten att den är acceptabel
+- Targeting ok
+- Conditional LRT 42% ej statistiskt signifikanta
+
+### Reliabilitet
+
+```{r}
+d_test %>% 
+  select(!any_of(removed_items)) %>% 
+  RItif(samplePSI = T)
+```
+
+### Item-parametrar
+
+```{r}
+itemlabels %>% 
+  filter(itemnr %in% names(d)) %>% 
+  write_csv("results/wellbeing_itemnr.csv")
+
+d_test %>% 
+  select(!any_of(removed_items)) %>% 
+  RIitemparams()
+
+d_test %>% 
+  select(!any_of(removed_items)) %>% 
+  RIitemparams(output = "file", filename = "results/wellbeing_itemparams.csv")
+```
+
+### Targeting
+
+```{r}
+d_test %>% 
+  select(!any_of(removed_items)) %>% 
+  RItargeting()
+```
+
+### Person fit
+
+```{r}
+d_test %>% 
+  select(!any_of(removed_items)) %>% 
+  RIpfit()
+```
+
+
+```{r}
+removed_items <- c("f86c", "f101k", "f83h", "f54b")
+itemlabels %>% 
+  filter(itemnr %in% removed_items) %>% 
+  kbl_rise()
+```
+
+```{r}
+#d_backup <- d
+
+d <- d_backup %>% 
+  select(!any_of(removed_items))
+
+d_test <- d_test_backup %>% 
+  select(!any_of(removed_items))
+```
+
+## Analys 5
+
+Replikerar samma uppsättning items som i förra analysen
+
+```{r}
+#| column: margin
+#| echo: false
+RIlistItemsMargin(d)
+```
+
+::: panel-tabset
+### Mokken dimensionality
+```{r}
+aisp(d) %>% 
+  as.data.frame() %>% 
+  set_names("h > 0.3") %>% 
+  arrange(`h > 0.3`) %>% 
+  kbl_rise(tbl_width = 20)
+```
+
+### Item-restscore
+```{r}
+d_test %>% 
+  #select(!any_of(removed_items)) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+RIrestscore(d)
+```
+### Conditional infit
+```{r}
+simfit5 <- RIgetfit(d, iterations = 200, cpu = 8)
+RIitemfit(d, simfit5)
+```
+### CICC
+```{r}
+RIciccPlot(d)
+```
+### PCA
+```{r}
+#| tbl-cap: "PCA of Rasch model residuals"
+RIpcmPCA(d)
+RIbootPCA(d, iterations = 200, cpu = 8)
+```
+### Loadings 1st contrast
+```{r}
+RIloadLoc(d)
+```
+### Lokalt oberoende
+```{r}
+RIpartgamLD(d)
+```
+### Residualkorrelationer
+```{r}
+simcor5 <- RIgetResidCor(d, iterations = 500, cpu = 8)
+
+RIresidcorr(d, cutoff = simcor5$p99)
+```
+### Targeting
+```{r}
+#| fig-height: 9
+RItargeting(d)
+```
+### Itemhierarki
+```{r}
+#| fig-height: 9
+RIitemHierarchy(d)
+```
+### Conditional LRT
+```{r}
+clr_tests(d, model = "PCM")
+RIbootLRT(d, samplesize = 400, cpu = 8)
+```
+### Svarskategorier
+```{r}
+mirt(d, model=1, itemtype='Rasch', verbose = FALSE) %>% 
+  plot(type="trace", as.table = TRUE, 
+       theta_lim = c(-5,5))
+```
+### DIF kön
+```{r}
+RIpartgamDIF(d, d_dif$Kön)
+RIdifTableLR(d, d_dif$Kön)
+#| fig-height: 4
+RIdifThreshFigLR(d, d_dif$Kön)
+```
+### DIF årskurs
+```{r}
+RIpartgamDIF(d, d_dif$Årskurs)
+RIdifTableLR(d, d_dif$Årskurs)
+#| fig-height: 4
+RIdifThreshFigLR(d, d_dif$Årskurs)
+```
+:::
+
+- Tre dimensioner i Mokken. F92 och F99 och F67 och F68 sticker ut som två egna
+- F99 har 86.5 i overfit i bootrstrap och signifikant på 0.01 i restscore
+- F99 overfit i conditional infit, f86a något underfit
+- PCA 1.62
+- Korrelation mellan F99 och F92. Mindre korrelation mellan F68 och F67 men såpass liten att den är acceptabel
+- Conditonal LRT: 18.3% ej statistiskt signifikanta
+- Targeting ok
+- Kombinationen frågor med F99 inkluderat är sämre än i analys 4 utan F99
+
+### Reliabilitet
+
+```{r}
+d_test %>% 
+  select(!any_of(removed_items)) %>% 
+  RItif(samplePSI = T)
+```
+
+### Item-parametrar
+
+```{r}
+itemlabels %>% 
+  filter(itemnr %in% names(d)) %>% 
+  write_csv("results/wellbeing20_itemnr.csv")
+
+d_test %>% 
+  select(!any_of(removed_items)) %>% 
+  RIitemparams()
+
+d_test %>% 
+  select(!any_of(removed_items)) %>% 
+  RIitemparams(output = "file", filename = "results/wellbeing20_itemparams.csv")
+```
+
+### Targeting
+
+```{r}
+d_test %>% 
+  select(!any_of(removed_items)) %>% 
+  RItargeting()
+```
+
+### Person fit
+
+```{r}
+d_test %>% 
+  select(!any_of(removed_items)) %>% 
+  RIpfit()
+```
+
+
+
+
+
+
+
+
+
+
+

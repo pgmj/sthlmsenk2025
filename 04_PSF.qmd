@@ -1,0 +1,1421 @@
+---
+title: "Psykiska/psykosomatiska besvär"
+title-block-banner: "#009ca6"
+title-block-banner-color: "#FFFFFF"
+date: last-modified
+format: html
+execute:
+  echo: true
+  warning: false
+  message: false
+  cache: true
+editor_options: 
+  markdown: 
+    wrap: 72
+  chunk_output_type: console
+---
+
+```{r}
+#| label: setup
+#| include: false
+
+library(mokken)
+library(arrow)
+library(ggrepel)
+library(car)
+library(grateful) 
+library(kableExtra)
+library(readxl)
+library(tidyverse)
+library(eRm)
+library(mirt)
+library(iarm)
+library(psych)
+library(ggplot2)
+library(psychotree)
+library(matrixStats)
+library(reshape)
+library(knitr)
+library(patchwork)
+library(formattable) 
+library(easyRasch) # devtools::install_github("pgmj/easyRasch")
+library(glue)
+library(foreach)
+#library(foreign)
+library(haven)
+library(labelled)
+library(gtsummary)
+
+### some commands exist in multiple packages, here we define preferred ones that are frequently used
+select <- dplyr::select
+count <- dplyr::count
+recode <- car::recode
+rename <- dplyr::rename
+filter <- dplyr::filter
+
+# import item information
+itemlabels <- read_excel("itemlabels/PSF_itemlabels.xls")
+
+# where is the data? This is for Mac
+datafolder <- "~/Library/CloudStorage/OneDrive-SharedLibraries-RISE/SHIC - Data i Dialog - Data i Dialog/data/"
+df.all <- read_parquet(paste0(datafolder,"Stockholm Stad/2024/sthlm02-24.parquet"))
+
+# add windows path below
+#datafolder <- "C:/Users/fridasan/RISE/SHIC - Data i Dialog - 2024/"
+#df.all <- read_parquet(paste0(datafolder,"sthlm02-24.parquet"))
+
+#sthlm <- read_spss(paste0(datafolder,"Stockholm Stad/2024/Stockholmsenkäten 2002-2024 Stockholm.sav"))
+#write_parquet(sthlm, paste0(datafolder,"Stockholm Stad/2024/sthlm02-24.parquet"))
+
+# subset data for this analysis
+df <- df.all %>% 
+  select(all_of(itemlabels$itemnr),Kön,ARSKURS,ar,SkolSDO) %>% 
+  mutate(across(all_of(itemlabels$itemnr), ~ car::recode(.x,"999=NA")))
+
+#val_labels(df.all$F99)
+```
+
+```{r}
+#| label: recoderawdata
+#| include: false
+
+neg.items <- c("F88","F89","F90","F91","F92","F93","F94","F95","F97","F98")
+pos.items <- c("F96","F99")
+
+df %>% 
+  select(all_of(itemlabels$itemnr)) %>% 
+  RIbarstack()
+
+df %>% 
+  mutate(across(all_of(itemlabels$itemnr), ~ as.numeric(.x))) %>% 
+  mutate(across(all_of(neg.items), ~ .x - 1)) %>% 
+  mutate(across(all_of(pos.items), ~ car::recode(.x,"5=0;4=1;3=2;2=3;1=4"))) %>% 
+  select(all_of(itemlabels$itemnr)) %>% 
+  RIbarstack()
+
+df_recoded <- df %>% 
+  mutate(across(all_of(itemlabels$itemnr), ~ as.numeric(.x))) %>% 
+  mutate(across(all_of(neg.items), ~ .x - 1)) %>% 
+  mutate(across(all_of(pos.items), ~ car::recode(.x,"5=0;4=1;3=2;2=3;1=4")))
+
+# # koda om svaren för items som ingår i psykiska/psykosomatiska besvär, F88-F99 i data, fråga 90-101 i PDF
+# # variabler df[289:300] i datafil.
+# # låg poäng = låg risk
+# df$F88<-recode(df$F88,"'Aldrig'=1;'Ungefär 1 gång/termin'=2;'Ungefär 1 gång/månad'=3;'Ungefär 1 gång/vecka'=4;'Flera gånger i veckan'=5",as.factor=FALSE)
+# df$F89<-recode(df$F89,"'Väldigt ofta'=5;'Ganska ofta'=4;'Ibland'=3;'Någon enstaka gång'=2;'Sällan'=1",as.factor=FALSE)
+# df$F90<-recode(df$F90,"'Sällan'=1;'Någon enstaka gång'=2;'Ibland'=3;'Ganska ofta'=4;'Väldigt ofta'=5",as.factor=FALSE)
+# df$F91<-recode(df$F91,"'Aldrig'=1;'Ungefär 1 gång/termin'=2;'Ungefär 1 gång/månad'=3;'Ungefär 1 gång/vecka'=4;'Flera gånger i veckan'=5",as.factor=FALSE)
+# df$F92<-recode(df$F92,"'Inte alls'=1;'Ganska lite'=2;'En del'=3;'Ganska mycket'=4;'Väldigt mycket'=5",as.factor=FALSE)
+# df$F93<-recode(df$F93,"'Aldrig'=1;'Ungefär 1 gång/termin'=2;'Ungefär 1 gång/månad'=3;'Ungefär 1 gång/vecka'=4;'Flera gånger i veckan'=5",as.factor=FALSE)
+# df$F94<-recode(df$F94,"'Väldigt ofta'=5;'Ganska ofta'=4;'Ibland'=3;'Någon enstaka gång'=2;'Nästan aldrig'=1",as.factor=FALSE)
+# df$F95<-recode(df$F95,"'Aldrig'=1;'Ungefär 1 kväll/termin'=2;'Ungefär 1 kväll/månad'=3;'Ungefär 1 kväll/vecka'=4;'Flera gånger i veckan'=5",as.factor=FALSE)
+# df$F96<-recode(df$F96,"'Nästan aldrig'=5;'Någon enstaka gång'=4;'Ibland'=3;'Ganska ofta'=2;'Oftast'=1",as.factor=FALSE)
+# df$F97<-recode(df$F97,"'Sällan'=1;'Någon enstaka gång'=2;'Ibland'=3;'Ganska ofta'=4;'Väldigt ofta'=5",as.factor=FALSE)
+# df$F98<-recode(df$F98,"'Aldrig'=1;'Ungefär 1 natt/termin'=2;'Ungefär 1 natt/månad'=3;'Ungefär 1 natt/vecka'=4;'Flera nätter i veckan'=5",as.factor=FALSE)
+# df$F99<-recode(df$F99,"'Sällan'=5;'Någon enstaka gång'=4;'Ibland'=3;'Ganska ofta'=2;'Väldigt ofta'=1",as.factor=FALSE)
+# 
+```
+
+```{r}
+df_r2 <- df_recoded %>% 
+  mutate(SkolSDO = factor(SkolSDO, levels = val_labels(df_recoded$SkolSDO),
+                          labels = names(val_labels(df_recoded$SkolSDO)))) %>% 
+  mutate(Årskurs = factor(ARSKURS, levels = val_labels(df_recoded$ARSKURS),
+                          labels = names(val_labels(df_recoded$ARSKURS)))) %>% 
+  select(!ARSKURS) %>% 
+  mutate(SkolSDO = car::recode(SkolSDO,"99=NA;'Övrigt ospecificerat'=NA"),
+         Årskurs = car::recode(Årskurs,"999=NA")) %>% 
+  mutate(Kön = factor(Kön, levels = 1:2, labels = c("Pojke","Flicka")),
+         År = as.numeric(ar)) %>% 
+  select(!ar)
+
+```
+
+```{r}
+df_r2 %>% 
+  select(F88:F99) %>% 
+  pivot_longer(everything()) %>% 
+  distinct(value)
+```
+
+Recoding looks good, no unexpected values.
+
+Samtliga frågor har fem svarskategorier, vilka varierar mellan frågorna. Fem frågor har svarskategorier med etiketter från "Aldrig" till "Flera gånger i veckan" (specifik frekvens). Sex frågor har från "Sällan" till "Väldigt ofta" (subjektiv frekvens), och en från "Inte alls" till "Väldigt mycket" (subjektiv "intensitet").
+
+Svarsdata har kodats så att högre "poäng" innebär mera besvär/högre risk på samtliga frågor.
+
+Sektionen i PDF/pappers-enkäten inleds med meningen: "NÅGRA FRÅGOR OM HUR DU MÅR".
+
+```{r}
+library(rsample)
+set.seed(14578)
+# create dataframe with 2024 data with all variables (post recode) and only complete responses
+df24 <- df_r2 %>% 
+  filter(År == 2024) %>% 
+  na.omit() %>% 
+  select(!År)
+
+# Put 1/5 of the data into the training set 
+data_split <- initial_split(df24, prop = 1/20, strata = SkolSDO)
+
+# Create data frames for the two sets:
+d <- training(data_split)
+d_test  <- testing(data_split)
+
+# create DIF df
+d_dif <- d %>% 
+  select(Kön,Årskurs,SkolSDO)
+
+d_testdif <- d_test %>% 
+  select(Kön,Årskurs,SkolSDO)
+
+# remove non-items
+d <- d %>% 
+  select(!c(Kön,Årskurs,SkolSDO))
+d_test <- d_test %>% 
+  select(!c(Kön,Årskurs,SkolSDO))
+```
+
+## Deskriptiva data
+
+### Demografi
+
+Vi har delat data i två olika stora sampel.
+
+```{r}
+#| label: descriptives1
+#| layout-ncol: 2
+tbl_summary(d_dif)
+tbl_summary(d_testdif)
+```
+
+### Item-data
+
+::: panel-tabset
+#### Tile plot
+```{r}
+RItileplot(d)
+```
+#### Stacked bars
+```{r}
+RIbarstack(d)
+```
+:::
+
+## Analys 1 samtliga items
+
+```{r}
+#| column: margin
+#| echo: false
+RIlistItemsMargin(d)
+```
+
+::: panel-tabset
+### Mokken dimensionality
+```{r}
+aisp(d) %>% 
+  as.data.frame() %>% 
+  set_names("h > 0.3") %>% 
+  arrange(`h > 0.3`) %>% 
+  kbl_rise(tbl_width = 20)
+```
+
+### Item-restscore
+```{r}
+d_test %>% 
+  #select(!any_of(removed_items)) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+RIrestscore(d)
+```
+### PCA
+```{r}
+#| tbl-cap: "PCA of Rasch model residuals"
+RIpcmPCA(d)
+```
+### Loadings 1st contrast
+```{r}
+
+RIloadLoc(d)
+```
+### Lokalt oberoende
+```{r}
+RIpartgamLD(d)
+```
+### Svarskategorier
+```{r}
+mirt(d, model=1, itemtype='Rasch', verbose = FALSE) %>% 
+  plot(type="trace", as.table = TRUE, 
+       theta_lim = c(-5,5))
+mirt(d_test, model=1, itemtype='Rasch', verbose = FALSE) %>% 
+  plot(type="trace", as.table = TRUE, 
+       theta_lim = c(-5,5))
+
+```
+:::
+
+Mokken ogillar item F99, och ser i övrigt två dimensioner. En med F89, samt 91-93 och 95-96.
+
+PCA av residualer visar ett mycket högt värde på första eigenvalue, 4.81. Detta tyder på att 5 items utgör en separat dimension.
+
+Två kluster uppstår i figuren som visar faktorladdningar på första residualkontrasten. Ena klustret är:
+
+- F89    Känner du dig ledsen och deppig utan att veta varför?
+- F91    Hur ofta har du dålig aptit?                                                                                                                
+- F92    Hur mycket skulle du vilja ändra på dig själv?                                                                                              
+- F93    Hur ofta har du under detta läsår haft ”nervös mage”
+- F95    Hur ofta har du under detta läsår haft svårt att somna?                                                                                     
+- F96    Är du nöjd med ditt utseende?  
+
+Samtliga item stämmer överens med mokken-analysen. Alla utom F89 stämmer överens med item-restscore bootstrap overfit items. Andra klustret är:
+
+- F88    Hur ofta har du haft huvudvärk detta läsår?
+- F90    Händer det att du känner dig rädd utan att veta varför?
+- F94    Hur ofta tycker du att du inget duger till?
+- F97    Känner du dig slö och olustig?                                                                                                              
+- F98    Hur ofta har det hänt under detta läsår att du sovit oroligt och vaknat under natten?                                                       
+- F99    Hur ofta tycker du att det är riktigt härligt att leva?
+
+Alla items utom F99 stämmer överens med mokken-analysen. Alla items stämmer överens med item-restscore bootstrap underfit items.
+
+Det verkar således klokt att redan i detta skede dela upp items. F89 och F99 får vara med i båda initialt.
+
+## Kluster 1, analys 1
+
+```{r}
+kluster1 <- c("F89","F91","F92","F93","F95","F96","F99")
+kluster2 <- c("F89","F88","F90","F94","F97","F98","F99")
+
+d_backup <- d
+
+d <- d_backup %>% 
+  select(all_of(kluster1))
+```
+
+```{r}
+#| column: margin
+#| echo: false
+RIlistItemsMargin(d)
+```
+
+::: panel-tabset
+### Mokken dimensionality
+```{r}
+aisp(d) %>% 
+  as.data.frame() %>% 
+  set_names("h > 0.3") %>% 
+  arrange(`h > 0.3`) %>% 
+  kbl_rise(tbl_width = 20)
+```
+
+### Item-restscore
+```{r}
+d_test %>% 
+  select(all_of(kluster1)) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+RIrestscore(d)
+```
+### PCA
+```{r}
+#| tbl-cap: "PCA of Rasch model residuals"
+RIpcmPCA(d)
+```
+### Loadings 1st contrast
+```{r}
+
+RIloadLoc(d)
+```
+:::
+
+Vi kan ta bort item F99 redan nu.
+
+## Kluster 1, analys 2
+
+```{r}
+d$F99 <- NULL
+```
+
+```{r}
+#| column: margin
+#| echo: false
+RIlistItemsMargin(d)
+```
+
+::: panel-tabset
+### Mokken dimensionality
+```{r}
+aisp(d) %>% 
+  as.data.frame() %>% 
+  set_names("h > 0.3") %>% 
+  arrange(`h > 0.3`) %>% 
+  kbl_rise(tbl_width = 20)
+```
+
+### Item-restscore
+```{r}
+d_test %>% 
+  select(all_of(kluster1)) %>% 
+  select(!F99) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+#RIrestscore(d)
+```
+### PCA
+```{r}
+#| tbl-cap: "PCA of Rasch model residuals"
+RIpcmPCA(d)
+```
+### Loadings 1st contrast
+```{r}
+
+RIloadLoc(d)
+```
+### Lokalt oberoende
+```{r}
+RIpartgamLD(d)
+d_test %>% 
+  select(all_of(kluster1)) %>% 
+  select(!F99) %>% 
+  RIpartgamLD()
+```
+### Targeting
+```{r}
+#| fig-height: 9
+RItargeting(d)
+```
+### Itemhierarki
+```{r}
+#| fig-height: 9
+RIitemHierarchy(d)
+```
+### Svarskategorier
+```{r}
+mirt(d, model=1, itemtype='Rasch', verbose = FALSE) %>% 
+  plot(type="trace", as.table = TRUE, 
+       theta_lim = c(-5,5))
+d_test %>% 
+  select(all_of(kluster1)) %>% 
+  select(!F99) %>% 
+  mirt(model=1, itemtype='Rasch', verbose = FALSE) %>% 
+  plot(type="trace", as.table = TRUE, 
+       theta_lim = c(-5,5))
+```
+### DIF kön
+```{r}
+RIpartgamDIF(d, d_dif$Kön)
+RIdifTableLR(d, d_dif$Kön)
+```
+### DIF årskurs
+```{r}
+RIpartgamDIF(d, d_dif$Årskurs)
+RIdifTableLR(d, d_dif$Årskurs)
+```
+:::
+
+F92 och F96 har en påtaglig residualkorrelation och avviker tillsammans i loadingplotten.
+
+- F96    Är du nöjd med ditt utseende?   
+- F92    Hur mycket skulle du vilja ändra på dig själv? 
+
+F89 är overfit.
+
+Inga problem med DIF.
+
+```{r}
+d_test %>% 
+  select(all_of(kluster1)) %>% 
+  select(!c(F99,F96)) %>% 
+  RIbootLRT()
+
+d_test %>% 
+  select(all_of(kluster1)) %>% 
+  select(!c(F99,F92)) %>% 
+  RIbootLRT()
+```
+
+Item 96 ställer till mer problem och tas bort.
+
+## Kluster 1, analys 3
+
+```{r}
+d$F96 <- NULL
+```
+
+```{r}
+#| column: margin
+#| echo: false
+RIlistItemsMargin(d)
+```
+
+::: panel-tabset
+### Item-restscore
+```{r}
+d_test %>% 
+  select(all_of(kluster1)) %>% 
+  select(!c(F99,F96)) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+RIrestscore(d)
+```
+### PCA & LRT
+```{r}
+#| tbl-cap: "PCA of Rasch model residuals"
+RIpcmPCA(d)
+clr_tests(d, model = "PCM")
+```
+### Loadings 1st contrast
+```{r}
+
+RIloadLoc(d)
+```
+### Lokalt oberoende
+```{r}
+RIpartgamLD(d)
+d_test %>% 
+  select(all_of(kluster1)) %>% 
+  select(!c(F99,F96)) %>% 
+  RIpartgamLD()
+```
+### Targeting
+```{r}
+#| fig-height: 9
+RItargeting(d)
+```
+### Itemhierarki
+```{r}
+#| fig-height: 9
+RIitemHierarchy(d)
+```
+### Svarskategorier
+```{r}
+mirt(d, model=1, itemtype='Rasch', verbose = FALSE) %>% 
+  plot(type="trace", as.table = TRUE, 
+       theta_lim = c(-5,5))
+d_test %>% 
+  select(all_of(kluster1)) %>% 
+  select(!c(F99,F96)) %>% 
+  mirt(model=1, itemtype='Rasch', verbose = FALSE) %>% 
+  plot(type="trace", as.table = TRUE, 
+       theta_lim = c(-5,5))
+```
+### Score groups
+```{r}
+d %>% 
+  PCM() %>% 
+  item_obsexp()
+```
+:::
+
+F89 fortsatt overfit. 
+
+```{r}
+d_test %>% 
+  select(all_of(kluster1)) %>% 
+  select(!c(F99,F96)) %>% 
+  RIbootLRT()
+
+d_test %>% 
+  select(all_of(kluster1)) %>% 
+  select(!c(F99,F96,F89)) %>% 
+  RIbootLRT()
+```
+
+Bättre LRT utan F89.
+
+Vi har också problem med svarskategorier för samtliga items.
+
+```{r}
+d_test %>% 
+  select(all_of(kluster1)) %>% 
+  select(!c(F99,F96)) %>% 
+  mirt(model=1, itemtype='Rasch', verbose = FALSE) %>% 
+  plot(type="trace", as.table = TRUE, 
+       theta_lim = c(-5,5))
+```
+
+Item 91, 92, 93, 95 har följande svarskategorier:
+
+- F91, 93, 95: 'Aldrig'=0;'Ungefär 1 gång/termin'=1;'Ungefär 1 gång/månad'=2;'Ungefär 1 gång/vecka'=3;'Flera gånger i veckan'=4
+- F92,'Inte alls'=0;'Ganska lite'=1;'En del'=2;'Ganska mycket'=3;'Väldigt mycket'=4
+- F89,"'Väldigt ofta'=4;'Ganska ofta'=3;'Ibland'=2;'Någon enstaka gång'=1;'Sällan'=0
+
+Vi testar att slå ihop:
+
+- F91 och F93: 1+2 och 3+4 (ganska lite + en del; ganska+väldigt mycket). "Aldrig" är kvar som lägsta alternativ
+- F95: 3+4 (ganska/väldigt mycket)
+- F92: 1+2 (ganska lite + en del)
+- F89: 1+2 och 3+4 (någon enstaka gång + ibland; ganska+väldigt ofta). "Sällan" är kvar som lägsta alternativ
+
+
+```{r}
+d_test %>% 
+  select(all_of(kluster1)) %>% 
+  select(!c(F99,F96)) %>% 
+  mutate(F89 = car::recode(F89, "2=1;3=2;4=2", as.factor = FALSE),
+         F91 = car::recode(F91, "2=1;3=2;4=2", as.factor = FALSE),
+         F93 = car::recode(F93, "2=1;3=2;4=2", as.factor = FALSE),
+         F95 = car::recode(F95, "4=3", as.factor = FALSE),
+         F92 = car::recode(F92, "2=1;3=2;4=3", as.factor = FALSE),
+  ) %>% 
+  RItileplot()
+```
+
+```{r}
+d_test %>% 
+  select(all_of(kluster1)) %>% 
+  select(!c(F99,F96)) %>% 
+  mutate(F89 = car::recode(F89, "2=1;3=2;4=2", as.factor = FALSE),
+         F91 = car::recode(F91, "2=1;3=2;4=2", as.factor = FALSE),
+         F93 = car::recode(F93, "2=1;3=2;4=2", as.factor = FALSE),
+         F95 = car::recode(F95, "4=3", as.factor = FALSE),
+         F92 = car::recode(F92, "2=1;3=2;4=3", as.factor = FALSE),
+  ) %>% 
+  mirt(model=1, itemtype='Rasch', verbose = FALSE) %>% 
+  plot(type="trace", as.table = TRUE, 
+       theta_lim = c(-5,5))
+```
+
+Ser bättre ut. Vi testar LRT igen, med och utan F89.
+
+```{r}
+d_test %>% 
+  select(all_of(kluster1)) %>% 
+  select(!c(F99,F96)) %>% 
+    mutate(F89 = car::recode(F89, "2=1;3=2;4=2", as.factor = FALSE),
+         F91 = car::recode(F91, "2=1;3=2;4=2", as.factor = FALSE),
+         F93 = car::recode(F93, "2=1;3=2;4=2", as.factor = FALSE),
+         F95 = car::recode(F95, "4=3", as.factor = FALSE),
+         F92 = car::recode(F92, "2=1;3=2;4=3", as.factor = FALSE),
+  ) %>% 
+  RIbootLRT()
+
+d_test %>% 
+  select(all_of(kluster1)) %>% 
+    mutate(
+         F91 = car::recode(F91, "2=1;3=2;4=2", as.factor = FALSE),
+         F93 = car::recode(F93, "2=1;3=2;4=2", as.factor = FALSE),
+         F95 = car::recode(F95, "4=3", as.factor = FALSE),
+         F92 = car::recode(F92, "2=1;3=2;4=3", as.factor = FALSE),
+  ) %>% 
+  select(!c(F99,F96,F89)) %>% 
+  RIbootLRT()
+```
+
+Betydligt bättre utan F89 även nu, men överlag mer signifikanta test jämfört med innan.
+
+## Kluster 1, analys 4
+
+Vi tar bort F89.
+
+```{r}
+removed_items <- c("F99","F96","F89")
+d$F89 <- NULL
+
+d_test2 <- d_test %>% 
+  select(all_of(kluster1)) %>% 
+    mutate(
+         F91 = car::recode(F91, "2=1;3=2;4=2", as.factor = FALSE),
+         F93 = car::recode(F93, "2=1;3=2;4=2", as.factor = FALSE),
+         F95 = car::recode(F95, "4=3", as.factor = FALSE),
+         F92 = car::recode(F92, "2=1;3=2;4=3", as.factor = FALSE),
+  ) 
+
+d2 <- d %>% 
+  select(any_of(kluster1)) %>% 
+    mutate(
+         F91 = car::recode(F91, "2=1;3=2;4=2", as.factor = FALSE),
+         F93 = car::recode(F93, "2=1;3=2;4=2", as.factor = FALSE),
+         F95 = car::recode(F95, "4=3", as.factor = FALSE),
+         F92 = car::recode(F92, "2=1;3=2;4=3", as.factor = FALSE),
+  ) 
+
+```
+
+```{r}
+#| column: margin
+#| echo: false
+RIlistItemsMargin(d2)
+```
+
+::: panel-tabset
+### Item-restscore
+```{r}
+d_test2 %>% 
+  select(all_of(kluster1)) %>% 
+  select(!all_of(removed_items)) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+RIrestscore(d2)
+```
+### PCA & LRT
+```{r}
+#| tbl-cap: "PCA of Rasch model residuals"
+RIpcmPCA(d2)
+clr_tests(d2, model = "PCM")
+```
+### Loadings 1st contrast
+```{r}
+
+RIloadLoc(d2)
+```
+### Lokalt oberoende
+```{r}
+RIpartgamLD(d2)
+d_test2 %>% 
+  select(all_of(kluster1)) %>% 
+  select(!all_of(removed_items)) %>% 
+  RIpartgamLD()
+```
+### Targeting
+```{r}
+#| fig-height: 9
+d_test2 %>% 
+  select(all_of(kluster1)) %>% 
+  select(!all_of(removed_items)) %>% 
+  RItargeting()
+```
+### Itemhierarki
+```{r}
+#| fig-height: 9
+
+d_test2 %>% 
+  select(all_of(kluster1)) %>% 
+  select(!all_of(removed_items)) %>% 
+  RIitemHierarchy()
+```
+### Score groups
+```{r}
+d2 %>% 
+  PCM() %>% 
+  item_obsexp()
+```
+:::
+
+F91 är overfit och har problem med score groups.
+
+```{r}
+d_test2 %>% 
+  select(all_of(kluster1)) %>% 
+  select(!all_of(removed_items)) %>% 
+  RIbootLRT()
+
+d_test2 %>% 
+  select(all_of(kluster1)) %>% 
+  select(!all_of(removed_items)) %>% 
+  select(!F91) %>% 
+  RIbootLRT()
+```
+
+Ser betydligt bättre ut utan F91.
+
+```{r}
+removed_items <- c("F99","F96","F89","F91")
+
+```
+
+## Kluster 1, analys 5
+
+```{r}
+d2$F91 <- NULL
+```
+
+
+```{r}
+#| column: margin
+#| echo: false
+RIlistItemsMargin(d2)
+```
+
+::: panel-tabset
+### Item-restscore
+```{r}
+d_test2 %>% 
+  select(all_of(kluster1)) %>% 
+  select(!all_of(removed_items)) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+RIrestscore(d2)
+```
+### PCA & LRT
+```{r}
+#| tbl-cap: "PCA of Rasch model residuals"
+RIpcmPCA(d2)
+clr_tests(d2, model = "PCM")
+```
+
+### Lokalt oberoende
+```{r}
+RIpartgamLD(d2)
+d_test2 %>% 
+  select(all_of(kluster1)) %>% 
+  select(!all_of(removed_items)) %>% 
+  RIpartgamLD()
+```
+### Targeting
+```{r}
+#| fig-height: 4
+d_test2 %>% 
+  select(all_of(kluster1)) %>% 
+  select(!all_of(removed_items)) %>% 
+  RItargeting()
+```
+### Itemhierarki
+```{r}
+#| fig-height: 4
+
+d_test2 %>% 
+  select(all_of(kluster1)) %>% 
+  select(!all_of(removed_items)) %>% 
+  RIitemHierarchy()
+```
+### DIF kön
+```{r}
+d_test2 %>% 
+    select(all_of(kluster1)) %>% 
+  select(!all_of(removed_items)) %>% 
+  RIpartgamDIF(d_testdif$Kön)
+
+d_test2 %>% 
+    select(all_of(kluster1)) %>% 
+  select(!all_of(removed_items)) %>% 
+  RIdifTableLR(d_testdif$Kön)
+
+d_test2 %>% 
+    select(all_of(kluster1)) %>% 
+  select(!all_of(removed_items)) %>% 
+  RIdifThreshFigLR(d_testdif$Kön)
+
+```
+### DIF årskurs
+```{r}
+d_test2 %>% 
+    select(all_of(kluster1)) %>% 
+  select(!all_of(removed_items)) %>% 
+  RIpartgamDIF(d_testdif$Årskurs)
+
+d_test2 %>% 
+    select(all_of(kluster1)) %>% 
+  select(!all_of(removed_items)) %>% 
+  RIdifTableLR(d_testdif$Årskurs)
+
+d_test2 %>% 
+    select(all_of(kluster1)) %>% 
+  select(!all_of(removed_items)) %>% 
+  RIdifThreshFigLR(d_testdif$Årskurs)
+
+```
+### DIF kön+årskurs
+```{r}
+RIdifTable2(d_test2, d_testdif$Kön, d_testdif$Årskurs)
+```
+### Score groups
+```{r}
+d2 %>% 
+  PCM() %>% 
+  item_obsexp()
+```
+### Reliability
+```{r}
+#| fig-height: 4
+d_test2 %>% 
+  select(all_of(kluster1)) %>% 
+  select(!all_of(removed_items)) %>% 
+  RItif(samplePSI = T)
+```
+:::
+
+```{r}
+RIlistitems(d2)
+# F92	Hur mycket skulle du vilja ändra på dig själv?
+# F93	Hur ofta har du under detta läsår haft ”nervös mage” (t.ex. magknip, magkramper, orolig mage, illamående, gaser, förstoppning eller diarré)?
+# F95	Hur ofta har du under detta läsår haft svårt att somna?
+```
+
+Tre items, som ser något spretiga ut, men som fungerar i en och samma dimension.
+
+
+
+## Kluster 2, analys 1
+
+```{r}
+kluster1 <- c("F89","F91","F92","F93","F95","F96","F99")
+kluster2 <- c("F89","F88","F90","F94","F97","F98","F99")
+
+d <- d_backup %>% 
+  select(all_of(kluster2))
+```
+
+```{r}
+#| column: margin
+#| echo: false
+RIlistItemsMargin(d)
+```
+
+::: panel-tabset
+### Mokken dimensionality
+```{r}
+aisp(d) %>% 
+  as.data.frame() %>% 
+  set_names("h > 0.3") %>% 
+  arrange(`h > 0.3`) %>% 
+  kbl_rise(tbl_width = 20)
+```
+
+### Item-restscore
+```{r}
+d_test %>% 
+  select(all_of(kluster2)) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+RIrestscore(d)
+```
+### PCA & LRT
+```{r}
+#| tbl-cap: "PCA of Rasch model residuals"
+RIpcmPCA(d)
+clr_tests(d, model = "PCM")
+```
+### Loadings 1st contrast
+```{r}
+
+RIloadLoc(d)
+```
+:::
+
+Mokken indikerar att F89 och F99 inte fungerar.
+
+Item-restscore är mycket tydlig med att F89 avviker.
+
+Vi kan ta bort item F89 redan nu.
+
+## Kluster 2, analys 2
+
+```{r}
+removed_items2 <- c("F89")
+
+d$F89 <- NULL
+```
+
+```{r}
+#| column: margin
+#| echo: false
+RIlistItemsMargin(d)
+```
+
+::: panel-tabset
+### Mokken dimensionality
+```{r}
+aisp(d) %>% 
+  as.data.frame() %>% 
+  set_names("h > 0.3") %>% 
+  arrange(`h > 0.3`) %>% 
+  kbl_rise(tbl_width = 20)
+```
+
+### Item-restscore
+```{r}
+d_test %>% 
+  select(all_of(kluster2)) %>% 
+  select(!any_of(removed_items2)) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+#RIrestscore(d)
+```
+### PCA & LRT
+```{r}
+#| tbl-cap: "PCA of Rasch model residuals"
+RIpcmPCA(d)
+clr_tests(d, model = "PCM")
+```
+### Loadings 1st contrast
+```{r}
+
+RIloadLoc(d)
+```
+:::
+
+F88 passar inte in.
+
+## Kluster 2, analys 3
+
+```{r}
+removed_items2 <- c("F89","F88")
+
+d$F88 <- NULL
+```
+
+```{r}
+#| column: margin
+#| echo: false
+RIlistItemsMargin(d)
+```
+
+::: panel-tabset
+### Mokken dimensionality
+```{r}
+aisp(d) %>% 
+  as.data.frame() %>% 
+  set_names("h > 0.3") %>% 
+  arrange(`h > 0.3`) %>% 
+  kbl_rise(tbl_width = 20)
+```
+
+### Item-restscore
+```{r}
+d_test %>% 
+  select(all_of(kluster2)) %>% 
+  select(!any_of(removed_items2)) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+#RIrestscore(d)
+```
+### PCA & LRT
+```{r}
+#| tbl-cap: "PCA of Rasch model residuals"
+RIpcmPCA(d)
+clr_tests(d, model = "PCM")
+```
+### LRT bootstrap
+```{r}
+d_test %>% 
+  select(all_of(kluster2)) %>% 
+  select(!any_of(removed_items2)) %>% 
+  RIbootLRT()
+```
+### Loadings 1st contrast
+```{r}
+
+RIloadLoc(d)
+```
+### Lokalt oberoende
+```{r}
+RIpartgamLD(d)
+d_test %>% 
+  select(all_of(kluster2)) %>% 
+  select(!any_of(removed_items2)) %>% 
+  RIpartgamLD()
+```
+### Targeting
+```{r}
+#| fig-height: 9
+d_test %>% 
+  select(all_of(kluster2)) %>% 
+  select(!all_of(removed_items2)) %>% 
+  RItargeting()
+```
+### Itemhierarki
+```{r}
+#| fig-height: 9
+
+d_test %>% 
+  select(all_of(kluster2)) %>% 
+  select(!all_of(removed_items2)) %>% 
+  RIitemHierarchy()
+```
+### Score groups
+```{r}
+d_test %>% 
+  select(all_of(kluster2)) %>% 
+  select(!all_of(removed_items2)) %>% 
+  slice_sample(n = 600) %>% 
+  PCM() %>% 
+  item_obsexp()
+```
+### Svarskategorier
+```{r}
+d_test %>% 
+  select(all_of(kluster2)) %>% 
+  select(!all_of(removed_items2)) %>% 
+  mirt(model=1, itemtype='Rasch', verbose = FALSE) %>% 
+  plot(type="trace", as.table = TRUE, 
+       theta_lim = c(-5,5))
+```
+### DIF kön
+```{r}
+RIpartgamDIF(d, d_dif$Kön)
+RIdifTableLR(d, d_dif$Kön)
+
+d_test %>% 
+  select(all_of(kluster2)) %>% 
+  select(!all_of(removed_items2)) %>% 
+  RIpartgamDIF(d_testdif$Kön)
+```
+### DIF årskurs
+```{r}
+d_test %>% 
+  select(all_of(kluster2)) %>% 
+  select(!all_of(removed_items2)) %>% 
+  RIpartgamDIF(d_testdif$Årskurs)
+
+RIdifTableLR(d, d_dif$Årskurs)
+```
+:::
+
+Ser ganska bra ut, bortsett från svarskategorierna för flera items. Men LRT är skeptisk, så något mer kanske finns att avtäcka här.
+
+Vi börjar med svarskategorierna.
+
+## Kluster 2 - Omkodning svarskategorier
+
+- F90,"'Sällan'=0;'Någon enstaka gång'=1;'Ibland'=2;'Ganska ofta'=3;'Väldigt ofta'=4"
+- F94,"'Väldigt ofta'=4;'Ganska ofta'=3;'Ibland'=2;'Någon enstaka gång'=1;'Nästan aldrig'=0"
+- F97,"'Sällan'=0;'Någon enstaka gång'=1;'Ibland'=2;'Ganska ofta'=3;'Väldigt ofta'=4"
+- F98,"'Aldrig'=0;'Ungefär 1 natt/termin'=1;'Ungefär 1 natt/månad'=2;'Ungefär 1 natt/vecka'=3;'Flera nätter i veckan'=4"
+- F99,"'Sällan'=4;'Någon enstaka gång'=3;'Ibland'=2;'Ganska ofta'=1;'Väldigt ofta'=0"
+
+```{r}
+d_test %>% 
+  select(all_of(kluster2)) %>% 
+  select(!all_of(removed_items2)) %>% 
+  mutate(F90 = car::recode(F90, "2=1;3=2;4=2", as.factor = FALSE),
+         F94 = car::recode(F94, "1=0;2=1;3=2;4=3", as.factor = FALSE),
+         F97 = car::recode(F97, "1=0;2=1;3=2;4=3", as.factor = FALSE),
+         F98 = car::recode(F98, "1=0;2=1;3=2;4=3", as.factor = FALSE),
+         F99 = car::recode(F99, "4=3", as.factor = FALSE),
+  ) %>% 
+  RItileplot()
+  
+d_test %>% 
+  select(all_of(kluster2)) %>% 
+  select(!all_of(removed_items2)) %>% 
+  mutate(F90 = car::recode(F90, "2=1;3=2;4=2", as.factor = FALSE),
+         F94 = car::recode(F94, "1=0;2=1;3=2;4=3", as.factor = FALSE),
+         F97 = car::recode(F97, "1=0;2=1;3=2;4=3", as.factor = FALSE),
+         F98 = car::recode(F98, "1=0;2=1;3=2;4=3", as.factor = FALSE),
+         F99 = car::recode(F99, "4=3", as.factor = FALSE),
+  ) %>% 
+  mirt(model=1, itemtype='Rasch', verbose = FALSE) %>% 
+  plot(type="trace", as.table = TRUE, 
+       theta_lim = c(-5,5))
+```
+
+- F90: 1+2 och 3+4
+- F94: 0+1 (Någon enstaka gång & Nästan aldrig)
+- F97: 0+1 (Sällan & Någon enstaka gång)
+- F98: 0+1 (Aldrig & Ungefär 1 natt/termin)
+- F99: 3+4 (Sällan & Någon enstaka gång)
+
+
+## Kluster 2 - analys 4
+
+```{r}
+d_test2 <- d_test %>% 
+  select(all_of(kluster2)) %>% 
+  select(!all_of(removed_items2)) %>% 
+  mutate(F90 = car::recode(F90, "2=1;3=2;4=2", as.factor = FALSE),
+         F94 = car::recode(F94, "1=0;2=1;3=2;4=3", as.factor = FALSE),
+         F97 = car::recode(F97, "1=0;2=1;3=2;4=3", as.factor = FALSE),
+         F98 = car::recode(F98, "1=0;2=1;3=2;4=3", as.factor = FALSE),
+         F99 = car::recode(F99, "4=3", as.factor = FALSE),
+  )
+
+```
+
+
+```{r}
+#| column: margin
+#| echo: false
+RIlistItemsMargin(d_test2)
+```
+
+::: panel-tabset
+### Item-restscore
+```{r}
+d_test2 %>% 
+  # select(all_of(kluster2)) %>% 
+  # select(!any_of(removed_items2)) %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+#RIrestscore(d)
+```
+### LRT bootstrap
+```{r}
+d_test2 %>% 
+  # select(all_of(kluster2)) %>% 
+  # select(!any_of(removed_items2)) %>% 
+  RIbootLRT()
+```
+### PCA of residuals
+```{r}
+RIpcmPCA(d_test2)
+```
+### Lokalt oberoende
+```{r}
+RIpartgamLD(d_test2)
+```
+### Targeting
+```{r}
+#| fig-height: 5
+d_test2 %>% 
+  RItargeting()
+```
+### Itemhierarki
+```{r}
+#| fig-height: 5
+d_test2 %>% 
+  RIitemHierarchy()
+```
+### Score groups
+```{r}
+d_test2 %>% 
+  slice_sample(n = 600) %>% 
+  PCM() %>% 
+  item_obsexp()
+```
+### DIF kön
+```{r}
+d_test2 %>% 
+  RIpartgamDIF(d_testdif$Kön)
+
+d_test2 %>% 
+  RIdifTableLR(d_testdif$Kön)
+
+d_test2 %>% 
+  RIdifThreshFigLR(d_testdif$Kön)
+
+```
+### DIF årskurs
+```{r}
+d_test2 %>% 
+  RIpartgamDIF(d_testdif$Årskurs)
+
+d_test2 %>% 
+  RIdifTableLR(d_testdif$Årskurs)
+
+d_test2 %>% 
+  RIdifThreshFigLR(d_testdif$Årskurs)
+
+```
+### DIF kön+årskurs
+```{r}
+RIdifTable2(d_test2, d_testdif$Kön, d_testdif$Årskurs)
+```
+### Reliability
+```{r}
+RItif(d_test2)
+```
+### Person fit
+```{r}
+RIpfit(d_test2)
+
+RIpfit(d_test2, group = d_testdif$Kön)
+```
+:::
+
+11.8% har max/min score. Fler pojkar än flickor har låg person fit.
+
+LRT är inte optimalt, men item-restscore och residualkorrelationer ser bra ut. Minimal DIF för kön för item F90 indikerad av partial gamma. Men kanske är svaret på varför LRT inte presterar bra att finna i DIF-trösklarna för kön?
+
+Både F94 och F98 uppvisar oordnade trösklar för pojkar men ej flickor. Generellt är det större avstånd mellan trösklarna för flickor än för pojkar.
+
+- F94    Hur ofta tycker du att du inget duger till?
+- F98    Hur ofta har det hänt under detta läsår att du sovit oroligt och vaknat under natten?
+
+Item split för 94 och 98? Eller helt enkelt dela på hela skalan?
+
+## Kluster 2 - Könsuppdelad analys
+
+::: panel-tabset
+### Flickor LRT bootstrap
+```{r}
+d_test2 %>% 
+  add_column(kön = d_testdif$Kön) %>% 
+  filter(kön == "Flicka") %>% 
+  select(!kön) %>% 
+  RIbootLRT()
+```
+### Flickor item-restscore bootstrap
+```{r}
+d_test2 %>% 
+  add_column(kön = d_testdif$Kön) %>% 
+  filter(kön == "Flicka") %>% 
+  select(!kön) %>% 
+  RIbootRestscore(cpu = 8)
+```
+### Flickor local independence
+```{r}
+d_test2 %>% 
+  add_column(kön = d_testdif$Kön) %>% 
+  filter(kön == "Flicka") %>% 
+  select(!kön) %>% 
+  RIpartgamLD()
+```
+### Pojkar LRT bootstrap
+```{r}
+d_test2 %>% 
+  add_column(kön = d_testdif$Kön) %>% 
+  filter(kön == "Pojke") %>% 
+  select(!kön) %>% 
+  RIbootLRT()
+```
+### Pojkar item-restscore bootstrap
+```{r}
+d_test2 %>% 
+  add_column(kön = d_testdif$Kön) %>% 
+  filter(kön == "Pojke") %>% 
+  select(!kön) %>% 
+  RIbootRestscore(cpu = 8)
+```
+### Pojkar local independence
+```{r}
+d_test2 %>% 
+  add_column(kön = d_testdif$Kön) %>% 
+  filter(kön == "Pojke") %>% 
+  select(!kön) %>% 
+  RIpartgamLD()
+```
+### Pojkar svarskategorier
+```{r}
+d_test2 %>% 
+  add_column(kön = d_testdif$Kön) %>% 
+  filter(kön == "Pojke") %>% 
+  select(!kön) %>% 
+  mirt(model=1, itemtype='Rasch', verbose = FALSE) %>% 
+  plot(type="trace", as.table = TRUE, 
+       theta_lim = c(-5,5))
+
+d_test2 %>% 
+  add_column(kön = d_testdif$Kön) %>% 
+  filter(kön == "Pojke") %>% 
+  select(!kön) %>% 
+  RIitemHierarchy()
+```
+
+:::
+
+LRT bättre för flickor än pojkar. F98 är mera underfit för flickor. F94 mera overfit för pojkar. Inga local dependencies. Men oordnade svarskategorier för pojkar för F94 och F98, vilket förmodligen bidrar till LRT-problemen.
+
+### Flickor LRT utan F98
+
+```{r}
+d_test2 %>% 
+  add_column(kön = d_testdif$Kön) %>% 
+  filter(kön == "Flicka") %>% 
+  select(!kön) %>% 
+  select(!F98) %>% 
+  RIbootLRT()
+```
+
+Utan F98 ser det bättre ut för flickor.
+
+### Pojkar svarskategorier
+
+```{r}
+d_test2 %>% 
+  add_column(kön = d_testdif$Kön) %>% 
+  filter(kön == "Pojke") %>% 
+  select(!kön) %>% 
+  mutate(F94 = car::recode(F94, "2=1;3=2", as.factor = FALSE),
+         F98 = car::recode(F98, "2=1;3=2", as.factor = FALSE),
+  ) %>%
+  mirt(model=1, itemtype='Rasch', verbose = FALSE) %>% 
+  plot(type="trace", as.table = TRUE, 
+       theta_lim = c(-5,5))
+
+d_test2 %>% 
+  add_column(kön = d_testdif$Kön) %>% 
+  filter(kön == "Pojke") %>% 
+  select(!kön) %>% 
+  mutate(F94 = car::recode(F94, "2=1;3=2", as.factor = FALSE),
+         F98 = car::recode(F98, "2=1;3=2", as.factor = FALSE),
+  ) %>%
+  RIbootLRT()
+```
+
+Bättre för pojkar med, men inte bra.
+
+
+
+```{r}
+RIlistitems(d_test2)
+# F90	Händer det att du känner dig rädd utan att veta varför?
+# F94	Hur ofta tycker du att du inget duger till?
+# F97	Känner du dig slö och olustig?
+# F98	Hur ofta har det hänt under detta läsår att du sovit oroligt och vaknat under natten?
+# F99	Hur ofta tycker du att det är riktigt härligt att leva?
+```
+
+### Item thresholds parameters
+```{r}
+RIitemparams(d_test2)
+```
+
+
+## Test sammanslagning
+
+Vi provar att ta de tre items som fungerade i kluster 1, och de fem från kluster 2 och sätter samman dem.
+
+```{r}
+k2final_items <- c("F90", "F94", "F97", "F98", "F99")
+k1final_items <- c("F92", "F93", "F95")
+
+d_test3 <- d_test %>% 
+  select(all_of(k2final_items),all_of(k1final_items)) %>% 
+  mutate(F90 = car::recode(F90, "2=1;3=2;4=2", as.factor = FALSE),
+         F94 = car::recode(F94, "1=0;2=1;3=2;4=3", as.factor = FALSE),
+         F97 = car::recode(F97, "1=0;2=1;3=2;4=3", as.factor = FALSE),
+         F98 = car::recode(F98, "1=0;2=1;3=2;4=3", as.factor = FALSE),
+         F99 = car::recode(F99, "4=3", as.factor = FALSE),
+  ) %>% 
+  mutate(
+    F93 = car::recode(F93, "2=1;3=2;4=2", as.factor = FALSE),
+    F95 = car::recode(F95, "4=3", as.factor = FALSE),
+    F92 = car::recode(F92, "2=1;3=2;4=3", as.factor = FALSE),
+  ) 
+```
+
+```{r}
+#| column: margin
+#| echo: false
+RIlistItemsMargin(d_test3)
+```
+
+::: panel-tabset
+### Mokken dimensionality
+```{r}
+aisp(d_test3) %>% 
+  as.data.frame() %>% 
+  set_names("h > 0.3") %>% 
+  arrange(`h > 0.3`) %>% 
+  kbl_rise(tbl_width = 20)
+```
+### Item-restscore
+```{r}
+d_test3 %>% 
+  RIbootRestscore(iterations = 200, samplesize = 600, cpu = 8)
+```
+### LRT bootstrap
+```{r}
+d_test3 %>% 
+  RIbootLRT()
+```
+:::
+
+Nej, det är tydligt två olika dimensioner.
+
+
+
+
+## Programvara som använts för analyserna
+
+```{r}
+#| label: packagesv
+# pkgs <- cite_packages(cite.tidyverse = TRUE, 
+#                       output = "table",
+#                       bib.file = "grateful-refs.bib",
+#                       include.RStudio = TRUE,
+#                       out.dir = getwd())
+# formattable(pkgs, 
+#             table.attr = 'class=\"table table-striped\" style="font-size: 15px; font-family: Lato; width: 80%"')
+```
+
+```{r}
+sessionInfo()
+```
+
+
+## Referenser
+
+
+
+
+
+
+
+
+
+
+
+
+

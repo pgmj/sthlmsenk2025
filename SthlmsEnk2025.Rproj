@@ -1,0 +1,16 @@
+Version: 1.0
+ProjectId: c240f84b-9350-4e97-80bd-25af32d42622
+
+RestoreWorkspace: Default
+SaveWorkspace: Default
+AlwaysSaveHistory: Default
+
+EnableCodeIndexing: Yes
+UseSpacesForTab: Yes
+NumSpacesForTab: 2
+Encoding: UTF-8
+
+RnwWeave: Sweave
+LaTeX: pdfLaTeX
+
+ZoteroLibraries: "RISEmetrology"
